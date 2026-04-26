@@ -15,6 +15,12 @@
 
 ---
 
+## 인게임 스크린샷
+
+![gameplay](Screenshots/gameplay.png)
+
+---
+
 ## 시연 영상
 
 [![시연 영상](https://img.youtube.com/vi/7G13lTbAaio/0.jpg)](https://youtu.be/7G13lTbAaio)
