@@ -1,0 +1,335 @@
+// =========================================================================================
+// MyCharacter.h
+//
+// [���� ���]
+// �÷��̾ ���� �����ϴ� ���� ĳ���� Ŭ������ ����Դϴ�.
+// ī�޶�, ����, ��ų �ý��ۺ��� �Է� Ű ���ε�, �ִϸ��̼� �� UI ���� ���� �Ѱ��ϴ� �����̳� ������ �����մϴ�.
+// =========================================================================================
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/Character.h"
+#include "InputActionValue.h"
+#include "MoneyComponent.h"
+#include "NPC/Shop/ShopNPC.h"
+#include "Skill/SkillComponent.h"
+#include "GameplayTagContainer.h"
+#include "MyCharacter.generated.h"
+
+class UInputMappingContext;
+class UInputAction;
+class UPlayerHUDWidget;
+class USpringArmComponent;
+class UCameraComponent;
+class UInventoryComponent;
+class UQuickSlotComponent;
+class UCombatComponent;
+class UQuestComponent;
+class UTargetingComponent;
+class UUserWidget;
+class UMinimapComponent;
+class UMinimapWidget;
+class UHUDRootWidget;
+
+
+UCLASS()
+class THIRDGAME_API AMyCharacter : public ACharacter
+{
+	GENERATED_BODY()
+
+public:
+	AMyCharacter();
+
+protected:
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	// QuestLogWidget은 WBP_HUDRoot의 자식으로 통합되었습니다.
+
+	
+
+public:
+	virtual void Tick(float DeltaTime) override;
+
+	// �÷��̾��� ���� Ű �Է��� ���� ������ �����մϴ�.
+	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
+
+	// ĳ������ ���� ������ �����մϴ�.
+	virtual void Jump() override;
+
+	// �ȱ�, ���� �� ĳ������ �̵� ü�谡 ����� �� ȣ��˴ϴ�.
+	virtual void OnMovementModeChanged(EMovementMode PrevMovementMode, uint8 PreviousCustomMode) override;
+
+	// ������ ���� �� �ٴڿ� �������� �� ȣ��˴ϴ�.
+	virtual void Landed(const FHitResult& Hit) override;
+
+	// =============================================================
+	// [������Ʈ] �ٽ� ��� �и�
+	// =============================================================
+
+	// ȭ��(ī�޶�)�� ĳ���͸� ���� �Ÿ����� ����ٴϰ� ���ִ� �������Դϴ�.
+	// 미니맵 캡처 및 위젯을 관리하는 컴포넌트입니다.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Minimap")
+	UMinimapComponent* MinimapComp;
+
+	// PlayerHUD와 MinimapWidget을 하나로 묶는 루트 HUD 위젯입니다.
+	// 에디터에서 WBP_HUDRoot 블루프린트를 할당합니다.
+	UPROPERTY(EditDefaultsOnly, Category = "UI")
+	TSubclassOf<UHUDRootWidget> HUDRootClass;
+
+	// 생성된 루트 HUD 인스턴스입니다. 컷신 등에서 이 하나만 숨기면 됩니다.
+	UPROPERTY()
+	UHUDRootWidget* HUDRoot;
+
+	// 하위 호환용 포인터 — HUDRoot 생성 후 자식에서 꺼내어 할당합니다.
+	// CombatComponent 등 기존 코드가 그대로 동작합니다.
+	UPROPERTY()
+	UMinimapWidget* MinimapWidget;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera)
+	USpringArmComponent* CameraBoom;
+
+	// �÷��̾��� �þ߸� ���������� �������ϴ� ī�޶� ���Դϴ�.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera)
+	UCameraComponent* FollowCamera;
+
+	// ����� �� �Ҹ�ǰ�̳� ��ų�� ������ ����� �� �ְ� ���� ������ ������Ʈ�Դϴ�.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Component")
+	UQuickSlotComponent* QuickSlotComp;
+
+	// ĳ������ ���� ����Ŭ, �޺� Ÿ�� ���� �� ������ ó���� �����ϴ� ���� ������Ʈ�Դϴ�.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Component")
+	UCombatComponent* CombatComp;
+
+	// =============================================================
+	// [�Է�] ���� �׼� (Enhanced Input)
+	// =============================================================
+
+	// ��ü���� ���� Ű ���� ������ ���õ� ���ؽ�Ʈ �����Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputMappingContext* DefaultMappingContext;
+
+	// Ű����(WSAD) �̵� ���� �׼��Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* MoveAction;
+
+	// ���콺�� ���� ���� �� ȸ�� ���� �׼��Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* LookAction;
+
+	// ���� �߻� ���� �׼��Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* JumpAction;
+
+	// �⺻ ���� ���� ���� �׼��Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* AttackAction;
+
+	// NPC���� ��ȭ, ������ �ݱ� �� ȯ�� ���� �׼��Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* InteractAction;
+
+	// �κ��丮 â(����)�� ���� �ݴ� ���� �׼��Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* InventoryAction;
+
+	// �޸���(������Ʈ) Ȱ��ȭ ���� �׼��Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* SprintAction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input)
+	UInputAction* MagicAttackAction;
+
+	// �Է� �̺�Ʈ�� �����Ͽ� �̵� ó���� �����մϴ�.
+	void Move(const FInputActionValue& Value);
+
+	// �Է� �̺�Ʈ�� �����Ͽ� ī�޶� ������ �����ϴ�.
+	void Look(const FInputActionValue& Value);
+
+	// �Է� �̺�Ʈ�� �����Ͽ� ���� ������ Ʈ�����մϴ�.
+	void Attack(const FInputActionValue& Value);
+
+	// �Է� �̺�Ʈ�� �����Ͽ� ������ ��ȣ�ۿ��� �����մϴ�.
+	void Interact(const FInputActionValue& Value);
+
+	// �Է� �̺�Ʈ�� �����Ͽ� �κ��丮�� ����մϴ�.
+	void ToggleInventory(const FInputActionValue& Value);
+
+	UFUNCTION()
+	void ForceCloseInventory();
+
+
+	// ��ų Ʈ���� �����ִ� UI â�� ���ų� �ݽ��ϴ�.
+	void ToggleSkillWindow(const FInputActionValue& Value);
+
+	UFUNCTION()
+	void ForceCloseSkillWindow();
+
+
+
+	// =============================================================
+	// [UI] ȭ�� �� ����
+	// =============================================================
+
+	// HUDRoot 생성 후 자식에서 꺼내어 할당합니다.
+	// CombatComponent 등 기존 코드가 그대로 동작합니다.
+	UPROPERTY()
+	UPlayerHUDWidget* PlayerHUD;
+
+	// ����ǰ ȭ���� ������ �κ��丮 ���� Ŭ�����Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "UI")
+	TSubclassOf<class UInventoryWidget> InventoryWidgetClass;
+
+	// ȭ�鿡 ������ �κ��丮 ���� �ν��Ͻ��Դϴ�.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "UI")
+	class UInventoryWidget* InventoryWidget;
+
+	// ���� ������ ���� �� �κ��丮 UI�� ���ΰ�ħ�ϴ� �ݹ��Դϴ�.
+	UFUNCTION()
+	void OnInventoryUpdated();
+
+	// �ִϸ��̼� ���� ���� ���� ������ �̾�� ���� ��û�Ǵ� ó�� �Լ��Դϴ�.
+	UFUNCTION(BlueprintCallable, Category = "Combat")
+	void ProcessComboCommand();
+
+	// ���� ����� �Ÿ��� �־� FŰ�� ������ �� �ֿ� �� �ִ� �ٴ��� ������ �����Դϴ�.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Interaction")
+	class APickableItem* OverlappingItem;
+
+	// ��ü�� Ư�� ������ �������� �� ��ħ�� ���۵��� �˸��� �ݹ��Դϴ�.
+	virtual void NotifyActorBeginOverlap(AActor* OtherActor) override;
+
+	// ���� �ִ� ��ü�� ������ ��� �� ȣ��Ǵ� �ݹ��Դϴ�.
+	virtual void NotifyActorEndOverlap(AActor* OtherActor) override;
+
+	// =============================================================
+	// [������ �Է�] 
+	// =============================================================
+
+	// 1�� ~ 5�� ���� ��� ����Ű �׼��Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* QuickSlot1Action;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* QuickSlot2Action;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* QuickSlot3Action;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* QuickSlot4Action;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* QuickSlot5Action;
+
+	// ����Ű �Է� �߻� �� ������ ������ �ߵ���Ű�� �Լ����Դϴ�.
+	void OnQuickSlot1(const FInputActionValue& Value);
+	void OnQuickSlot2(const FInputActionValue& Value);
+	void OnQuickSlot3(const FInputActionValue& Value);
+	void OnQuickSlot4(const FInputActionValue& Value);
+	void OnQuickSlot5(const FInputActionValue& Value);
+
+	// ���޹��� �ε����� �ش��ϴ� ������ �������� �Ҹ�/����մϴ�.
+	void ProcessQuickSlot(int32 SlotIndex);
+
+	// =============================================================
+	// [�μ� �ý���/������Ʈ]
+	// =============================================================
+
+	// ���� �� ��� ȹ�� �������� ���� ���� �̺�Ʈ�� ó���� ������Ʈ�Դϴ�.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	class UMoneyComponent* MoneyComp;
+
+	// Ư�� ��ų(Q, E, R)�� ���� �Ǵܰ� ��ٿ��� ������ ������Ʈ�Դϴ�.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Component")
+	USkillComponent* SkillComp;
+
+	// Q, E, R ��ų ����Ű ���� �׼��Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* SkillQAction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	class UInputAction* SkillEAction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	class UInputAction* SkillRAction;
+
+	// �Է� �̺�Ʈ�� �����Ͽ� Ư�� ��ų�� �����մϴ�.
+	void UseSkillQ(const FInputActionValue& Value);
+	void UseSkillE(const FInputActionValue& Value);
+	void UseSkillR(const FInputActionValue& Value);
+
+	// =============================================================
+	// [���� �±� / ��Ÿ ������] 
+	// =============================================================
+
+	// ĳ������ ���� ����(���� ��, ����, ȸ�� ��)�� �����ϱ� ���� �����̳��Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "State")
+	FGameplayTagContainer ActionTags;
+
+	// ĳ���Ϳ��� Ư�� ���� �±׸� �ο��ϰų� ����, �����ϴ� ��ƿ��Ƽ �Լ����Դϴ�.
+	void AddStateTag(FName TagName);
+	void RemoveStateTag(FName TagName);
+
+	UFUNCTION(BlueprintPure, Category = "Tags")
+	bool HasStateTag(FName TagName);
+
+	// ��ų ���׷��̵� â�� ȣ���ϴ� �Է� �׼��Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* OpenSkillWindowAction;
+
+	// ȭ�鿡 ǥ�õ� ��ų Ʈ�� ���� Ŭ�����Դϴ�.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI")
+	TSubclassOf<UUserWidget> SkillWindowClass;
+
+	// �����Ǿ� �����ϴ� ��ų Ʈ�� â UI�� �ν��Ͻ��Դϴ�.
+	UPROPERTY()
+	class USkillWindowWidget* SkillWindowWidget;
+
+	// �����̳� ���� �������� ���ظ� �Ծ��� �� ȣ��Ǿ� ü���� ��� ����� �����մϴ�.
+	virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser) override;
+
+	// ������ ����Ʈ�� ���� ������ �޼��� ��������� �����ϴ� ������Ʈ�Դϴ�.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Quest")
+	UQuestComponent* QuestComponent;
+
+	// ĳ���Ͱ� ����(��������) �̵��� �ϰ� �ִ��� �����Դϴ�.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Movement")
+	bool bIsSprinting = false;
+
+	// ���� ��带 �۵���Ű�ų� �Ϲ� �ȱ�� �����մϴ�.
+	void StartSprint();
+	void StopSprint();
+
+	// ���� ���� ȭ�� ���� �켱 ���� ����� ã�� ������ �ִ� Ÿ���� ������Ʈ�Դϴ�.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	UTargetingComponent* TargetingComp;
+
+	// ĳ������ �ڼ��� ������(����) �Ǵ� ��ȭ�� ���� ��ȯ�մϴ�.
+	void EnterCombatStance();
+	void ExitCombatStance();
+
+	// ���� �ڼ��� ������ ���� �ð� ������Ű�� ���� Ÿ�̸� ��ü�Դϴ�.
+	FTimerHandle CombatTimerHandle;
+
+	// ���� �Ǵ� �ǰ� �� ���� ��� ���¸� ������ �ð�(��)�Դϴ�.
+	UPROPERTY(EditAnywhere, Category = "Combat")
+	float CombatTimeout = 5.0f;
+
+	// ȸ�� Ű�� ������ �� �ٴ��� ���� ���ϴ� �ִϸ��̼� ��Ÿ���Դϴ�.
+	UPROPERTY(EditAnywhere, Category = "Combat")
+	UAnimMontage* CombatRollMontage;
+
+	// �����Ⱑ ����Ǿ��� �� ȣ��Ǿ� �ڼ� �±� ���� ���½�ŵ�ϴ�.
+	UFUNCTION()
+	void OnRollMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+
+	// ���� ������ ������ ����(Wrapper) �Լ� ����
+	void MagicAttack();
+
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Combat|UI")
+	void OnSpawnDamageText(FVector HitLocation, float DamageAmount);
+};

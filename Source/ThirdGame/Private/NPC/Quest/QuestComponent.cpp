@@ -1,0 +1,308 @@
+// =========================================================================================
+// QuestComponent.cpp
+//
+// [파일 역할]
+// 플레이어에게 붙어 퀘스트 수락·진행도 추적·완료·보상 지급을 담당하는 컴포넌트입니다.
+// 퀘스트 상태(ActiveQuests · CompletedQuests)는 QuestSubsystem에 저장해 레벨 이동 후에도 유지됩니다.
+// QuestSubsystem의 OnQuestObjectiveUpdated 델리게이트를 구독해 몬스터 처치·아이템 사용·골드 수집을
+// 자동으로 진행도에 반영하고, 모든 태스크 완료 시 bIsReadyToComplete를 true로 설정합니다.
+// =========================================================================================
+
+#include "NPC/Quest/QuestComponent.h"
+#include "Engine/Engine.h"
+#include "NPC/Quest/QuestSubsystem.h"
+#include "MoneySubsystem.h"
+#include "Inventory/InventorySubsystem.h"
+#include "Item/ItemData.h"
+
+UQuestComponent::UQuestComponent()
+{
+    // 정적 컴포넌트이므로 Tick을 비활성화합니다.
+    PrimaryComponentTick.bCanEverTick = false;
+}
+
+// QuestSubsystem을 가져오는 내부 헬퍼 함수입니다.
+UQuestSubsystem* UQuestComponent::GetQuestSubsystem() const
+{
+    UGameInstance* GameInst = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+    if (!GameInst) return nullptr;
+    return GameInst->GetSubsystem<UQuestSubsystem>();
+}
+
+// QuestSubsystem의 목표 업데이트 이벤트를 구독합니다.
+void UQuestComponent::BeginPlay()
+{
+    Super::BeginPlay();
+
+    UQuestSubsystem* QuestSub = GetQuestSubsystem();
+    if (!QuestSub) return;
+
+    QuestSub->OnQuestObjectiveUpdated.AddDynamic(this, &UQuestComponent::HandleQuestObjectiveUpdated);
+}
+
+// 레벨 이동 등으로 컴포넌트가 파괴될 때 델리게이트 등록을 해제합니다.
+// 해제하지 않으면 레벨 재진입 시 BeginPlay에서 중복 등록되어 진행도가 2배로 오르는 버그가 생깁니다.
+void UQuestComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    Super::EndPlay(EndPlayReason);
+
+    UQuestSubsystem* QuestSub = GetQuestSubsystem();
+    if (!QuestSub) return;
+
+    QuestSub->OnQuestObjectiveUpdated.RemoveDynamic(this, &UQuestComponent::HandleQuestObjectiveUpdated);
+}
+
+// 새 퀘스트를 수락하고 QuestSubsystem의 ActiveQuests에 추가합니다.
+// 이미 진행 중이거나 완료된 퀘스트는 중복 수락을 막습니다.
+void UQuestComponent::AcceptQuest(FName NewQuestID)
+{
+    if (!QuestDataTable) return;
+
+    UQuestSubsystem* QuestSub = GetQuestSubsystem();
+    if (!QuestSub) return;
+
+    // 이미 완료된 퀘스트는 재수락하지 않습니다.
+    if (QuestSub->CompletedQuests.Contains(NewQuestID)) return;
+
+    // 이미 진행 중인 퀘스트는 중복 수락하지 않습니다.
+    for (const FActiveQuestInfo& ActiveQuest : QuestSub->ActiveQuests)
+    {
+        if (ActiveQuest.QuestID == NewQuestID) return;
+    }
+
+    FQuestData* FoundQuest = QuestDataTable->FindRow<FQuestData>(NewQuestID, TEXT("AcceptQuestContext"));
+    if (!FoundQuest) return;
+
+    // DataTable의 태스크 목록을 초기 진행도(0)로 변환해 ActiveQuests에 등록합니다.
+    FActiveQuestInfo NewActiveQuest;
+    NewActiveQuest.QuestID           = NewQuestID;
+    NewActiveQuest.bIsReadyToComplete = false;
+    NewActiveQuest.QuestName         = FoundQuest->QuestName;
+
+    for (const FQuestTaskData& Task : FoundQuest->Tasks)
+    {
+        FQuestTaskProgress NewTaskProgress;
+        NewTaskProgress.TaskType       = Task.TaskType;
+        NewTaskProgress.TargetID       = Task.TargetID;
+        NewTaskProgress.RequiredAmount = Task.RequiredAmount;
+        NewTaskProgress.TaskName       = Task.TaskName;
+        NewTaskProgress.CurrentAmount  = 0;
+        NewTaskProgress.bIsCompleted   = false;
+        NewActiveQuest.TaskProgresses.Add(NewTaskProgress);
+    }
+
+    // QuestSubsystem에 저장하므로 레벨 이동 후에도 데이터가 유지됩니다.
+    QuestSub->ActiveQuests.Add(NewActiveQuest);
+
+    OnQuestUIUpdated.Broadcast();
+}
+
+// QuestSubsystem이 브로드캐스트한 목표 이벤트를 받아 진행 중인 퀘스트 태스크를 업데이트합니다.
+// 모든 태스크가 완료되면 해당 퀘스트를 완료 대기(bIsReadyToComplete = true) 상태로 전환합니다.
+void UQuestComponent::HandleQuestObjectiveUpdated(EQuestTaskType TaskType, FName TargetID, int32 Amount)
+{
+    UQuestSubsystem* QuestSub = GetQuestSubsystem();
+    if (!QuestSub) return;
+
+    for (FActiveQuestInfo& ActiveQuest : QuestSub->ActiveQuests)
+    {
+        // 이미 완료 대기 상태인 퀘스트는 건너뜁니다.
+        if (ActiveQuest.bIsReadyToComplete) continue;
+
+        bool bAllTasksCompleted = true;
+
+        for (FQuestTaskProgress& Task : ActiveQuest.TaskProgresses)
+        {
+            if (Task.bIsCompleted) continue;
+
+            if (Task.TaskType == TaskType && Task.TargetID == TargetID)
+            {
+                Task.CurrentAmount += Amount;
+
+                if (Task.CurrentAmount >= Task.RequiredAmount)
+                {
+                    // 요구 수량을 초과하지 않도록 클램프합니다.
+                    Task.CurrentAmount = Task.RequiredAmount;
+                    Task.bIsCompleted  = true;
+                }
+            }
+
+            if (!Task.bIsCompleted)
+            {
+                bAllTasksCompleted = false;
+            }
+        }
+
+        // 모든 태스크가 끝나면 NPC에서 완료 대화를 할 수 있는 상태로 전환합니다.
+        if (bAllTasksCompleted)
+        {
+            ActiveQuest.bIsReadyToComplete = true;
+        }
+    }
+
+    OnQuestUIUpdated.Broadcast();
+}
+
+// 퀘스트 로그 위젯에 표시할 텍스트를 생성합니다.
+// 완료 대기 퀘스트 이름은 노란색 RichText 태그로 감쌉니다.
+FString UQuestComponent::GetQuestLogText()
+{
+    UQuestSubsystem* QuestSub = GetQuestSubsystem();
+    if (!QuestSub) return FString();
+
+    FString ResultText;
+
+    for (const FActiveQuestInfo& ActiveQuest : QuestSub->ActiveQuests)
+    {
+        if (ActiveQuest.bIsReadyToComplete)
+        {
+            ResultText += FString::Printf(TEXT("<Yellow>[%s]</>\n"), *ActiveQuest.QuestName);
+        }
+        else
+        {
+            ResultText += FString::Printf(TEXT("[%s]\n"), *ActiveQuest.QuestName);
+        }
+
+        for (const FQuestTaskProgress& Task : ActiveQuest.TaskProgresses)
+        {
+            if (Task.bIsCompleted)
+            {
+                // 완료된 태스크도 노란색으로 표시합니다.
+                ResultText += FString::Printf(TEXT("  <Yellow>- %s (%d / %d)</>\n"),
+                    *Task.TaskName, Task.CurrentAmount, Task.RequiredAmount);
+            }
+            else
+            {
+                ResultText += FString::Printf(TEXT("  - %s (%d / %d)\n"),
+                    *Task.TaskName, Task.CurrentAmount, Task.RequiredAmount);
+            }
+        }
+
+        ResultText += TEXT("\n");
+    }
+
+    return ResultText;
+}
+
+// 완료 대기 상태의 퀘스트를 최종 완료 처리하고 골드·아이템 보상을 지급합니다.
+void UQuestComponent::CompleteQuest(FName QuestID)
+{
+    UQuestSubsystem* QuestSub = GetQuestSubsystem();
+    if (!QuestSub) return;
+
+    // ActiveQuests에서 해당 퀘스트 인덱스를 검색합니다.
+    int32 FoundIndex = INDEX_NONE;
+    for (int32 i = 0; i < QuestSub->ActiveQuests.Num(); ++i)
+    {
+        if (QuestSub->ActiveQuests[i].QuestID == QuestID)
+        {
+            FoundIndex = i;
+            break;
+        }
+    }
+
+    if (FoundIndex == INDEX_NONE) return;
+
+    // 완료 대기 상태가 아니면 아직 완료할 수 없습니다.
+    if (!QuestSub->ActiveQuests[FoundIndex].bIsReadyToComplete) return;
+
+    if (!QuestDataTable) return;
+
+    FQuestData* QuestData = QuestDataTable->FindRow<FQuestData>(QuestID, TEXT("CompleteQuestContext"));
+    if (QuestData)
+    {
+        // 골드 보상 지급
+        if (QuestData->RewardGold > 0)
+        {
+            UMoneySubsystem* MoneySub = GetWorld()->GetGameInstance()->GetSubsystem<UMoneySubsystem>();
+            if (MoneySub)
+            {
+                MoneySub->AddGold(QuestData->RewardGold);
+            }
+        }
+
+        // 아이템 보상 지급: ItemDataTable에서 행을 찾아 InventorySubsystem에 추가합니다.
+        if (ItemDataTable)
+        {
+            UInventorySubsystem* InvSub = GetWorld()->GetGameInstance()->GetSubsystem<UInventorySubsystem>();
+            if (InvSub)
+            {
+                for (const FQuestItemReward& RewardNode : QuestData->RewardItems)
+                {
+                    FItemData* FoundItem = ItemDataTable->FindRow<FItemData>(RewardNode.ItemRowName, TEXT("QuestRewardLookup"));
+                    if (FoundItem)
+                    {
+                        FItemData ItemToGive     = *FoundItem;
+                        ItemToGive.Quantity      = RewardNode.Quantity;
+                        InvSub->AddItem(ItemToGive);
+                    }
+                }
+            }
+        }
+    }
+
+    // QuestSubsystem에 완료 기록을 남기고 활성 목록에서 제거합니다.
+    // Subsystem에 저장되므로 레벨 이동 후에도 완료 상태가 유지됩니다.
+    QuestSub->CompletedQuests.Add(QuestID);
+    QuestSub->ActiveQuests.RemoveAt(FoundIndex);
+
+    OnQuestUIUpdated.Broadcast();
+}
+
+// 퀘스트를 새로 수락할 수 있는지 확인합니다.
+// 이미 진행 중이거나 완료됐으면 false, 선행 퀘스트가 미완료면 false를 반환합니다.
+bool UQuestComponent::CanAcceptQuest(FName QuestID)
+{
+    if (IsQuestActive(QuestID) || IsQuestCompleted(QuestID)) return false;
+
+    if (!QuestDataTable) return false;
+
+    FQuestData* QuestData = QuestDataTable->FindRow<FQuestData>(QuestID, TEXT("CheckPrerequisites"));
+    if (!QuestData) return false;
+
+    UQuestSubsystem* QuestSub = GetQuestSubsystem();
+    if (!QuestSub) return false;
+
+    // 선행 퀘스트가 모두 완료된 경우에만 수락 가능합니다.
+    for (FName PrereqID : QuestData->PrerequisiteQuests)
+    {
+        if (!QuestSub->CompletedQuests.Contains(PrereqID)) return false;
+    }
+
+    return true;
+}
+
+// 해당 퀘스트가 현재 진행 중인지 확인합니다.
+bool UQuestComponent::IsQuestActive(FName QuestID)
+{
+    UQuestSubsystem* QuestSub = GetQuestSubsystem();
+    if (!QuestSub) return false;
+
+    for (const FActiveQuestInfo& ActiveQuest : QuestSub->ActiveQuests)
+    {
+        if (ActiveQuest.QuestID == QuestID) return true;
+    }
+    return false;
+}
+
+// 해당 퀘스트가 완료 대기(모든 태스크 완료) 상태인지 확인합니다.
+bool UQuestComponent::IsQuestReadyToComplete(FName QuestID)
+{
+    UQuestSubsystem* QuestSub = GetQuestSubsystem();
+    if (!QuestSub) return false;
+
+    for (const FActiveQuestInfo& ActiveQuest : QuestSub->ActiveQuests)
+    {
+        if (ActiveQuest.QuestID == QuestID) return ActiveQuest.bIsReadyToComplete;
+    }
+    return false;
+}
+
+// 해당 퀘스트가 최종 완료됐는지 확인합니다.
+bool UQuestComponent::IsQuestCompleted(FName QuestID)
+{
+    UQuestSubsystem* QuestSub = GetQuestSubsystem();
+    if (!QuestSub) return false;
+
+    return QuestSub->CompletedQuests.Contains(QuestID);
+}

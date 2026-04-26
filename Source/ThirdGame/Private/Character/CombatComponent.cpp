@@ -1,0 +1,785 @@
+// =========================================================================================
+// CombatComponent.cpp
+//
+// [파일 역할]
+// 플레이어 캐릭터의 전투 전반을 담당하는 컴포넌트입니다.
+//
+// [주요 기능]
+// 1. 스탯 관리     : HP·MP·SP 초기화 및 레벨 전환 시 StatSubsystem으로 저장·복원
+// 2. 근접 공격     : 3단 콤보(지상) / 점프 공격(공중), AnimNotify 기반 무기 스윕 트레이스
+// 3. 마법 공격     : 3단 마법 콤보, 타겟 위치 SphereTrace로 범위 피해 적용
+// 4. 버프 시스템   : 스킬 버프·아이템 버프를 독립 경로로 관리 (TMap 타이머 핸들)
+// 5. 피격·회복     : 피해 수신, 힐, 마나 회복, 공격력 증가 처리 및 HUD 갱신
+// =========================================================================================
+
+#include "CombatComponent.h"
+#include "MyCharacter.h"
+#include "MySword.h"
+#include "GameFramework/Character.h"
+#include "Animation/AnimInstance.h"
+#include "PlayerHUDWidget.h"
+#include "StatSubsystem.h"
+#include "DrawDebugHelpers.h"
+#include "Engine/Engine.h"
+#include "TargetingComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Kismet/KismetMathLibrary.h"
+#include "Kismet/GameplayStatics.h"
+#include "NiagaraFunctionLibrary.h"
+#include "WarningSubsystem.h"
+#include "Skill/SkillSubsystem.h"
+#include "Enemy/Enemy.h"
+
+#define ECC_WeaponTrace ECC_GameTraceChannel1
+
+// Tick을 활성화합니다. (마나 자동 회복, 타겟 추적 회전에 사용)
+UCombatComponent::UCombatComponent()
+{
+    PrimaryComponentTick.bCanEverTick = true;
+}
+
+// 소유자를 AMyCharacter로 캐스트해 반환하는 내부 헬퍼 함수입니다.
+AMyCharacter* UCombatComponent::GetCharacterOwner()
+{
+    return Cast<AMyCharacter>(GetOwner());
+}
+
+// 컴포넌트 시작 시 StatSubsystem에서 스탯을 복원하거나 초기값을 저장하고, 캐싱을 수행합니다.
+void UCombatComponent::BeginPlay()
+{
+    Super::BeginPlay();
+
+    UGameInstance* GI = GetWorld()->GetGameInstance();
+    if (!GI) return;
+
+    UStatSubsystem* StatSystem = GI->GetSubsystem<UStatSubsystem>();
+    if (!StatSystem) return;
+
+    // 저장된 스탯이 있으면 복원, 없으면(최초 실행) 현재 기본값을 저장합니다.
+    if (StatSystem->SavedCurrentHP >= 0.0f)
+    {
+        CurrentHP = StatSystem->SavedCurrentHP;
+        CurrentMP = StatSystem->SavedCurrentMP;
+        MaxHP     = StatSystem->SavedMaxHP;
+        MaxMP     = StatSystem->SavedMaxMP;
+        CurrentSP = StatSystem->SavedCurrentSP;
+        MaxSP     = StatSystem->SavedMaxSP;
+    }
+    else
+    {
+        StatSystem->SavedCurrentHP = CurrentHP;
+        StatSystem->SavedCurrentMP = CurrentMP;
+        StatSystem->SavedMaxHP     = MaxHP;
+        StatSystem->SavedMaxMP     = MaxMP;
+        StatSystem->SavedCurrentSP = CurrentSP;
+        StatSystem->SavedMaxSP     = MaxSP;
+    }
+
+    if (CurrentSP <= 0.0f)
+    {
+        CurrentSP = MaxSP;
+    }
+
+    // TargetingComponent와 WeaponMesh를 한 번만 조회해 캐싱합니다.
+    AMyCharacter* CharOwner = GetCharacterOwner();
+    if (CharOwner)
+    {
+        CachedTargetingComp = CharOwner->FindComponentByClass<UTargetingComponent>();
+
+        TArray<USkeletalMeshComponent*> SkeletalMeshes;
+        CharOwner->GetComponents<USkeletalMeshComponent>(SkeletalMeshes);
+        for (USkeletalMeshComponent* MeshComp : SkeletalMeshes)
+        {
+            if (MeshComp->GetName() == TEXT("WeaponMesh"))
+            {
+                CachedWeaponMesh = MeshComp;
+                break;
+            }
+        }
+    }
+
+    // 레벨 이동 전에 저장해둔 버프 아이템 상태를 복원합니다.
+    USkillSubsystem* SkillSys = GI->GetSubsystem<USkillSubsystem>();
+    if (SkillSys)
+    {
+        bool  bWasActive;
+        FName SavedBuffID;
+        float SavedAmount;
+        float SavedRemainingTime;
+        SkillSys->LoadAttackBuffData(bWasActive, SavedBuffID, SavedAmount, SavedRemainingTime);
+
+        if (bWasActive && SavedRemainingTime > 0.0f)
+        {
+            ApplyAttackBuff(SavedAmount, SavedRemainingTime, SavedBuffID);
+        }
+    }
+}
+
+// 레벨 전환 직전에 현재 스탯과 활성 버프 정보를 서브시스템에 저장하고 타이머를 정리합니다.
+void UCombatComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    // 마나 리젠은 UpdateStatToSubsystem을 별도로 호출하지 않으므로 여기서 반드시 저장합니다.
+    UpdateStatToSubsystem();
+
+    if (bIsAttackBuffActive)
+    {
+        float RemainingTime = GetWorld()->GetTimerManager().GetTimerRemaining(AttackBuffTimerHandle);
+        if (RemainingTime > 0.0f)
+        {
+            if (UGameInstance* GI = GetWorld()->GetGameInstance())
+            {
+                if (USkillSubsystem* SkillSys = GI->GetSubsystem<USkillSubsystem>())
+                {
+                    SkillSys->SaveAttackBuffData(true, ActiveAttackBuffID, ActiveAttackBuffAmount, RemainingTime);
+                }
+            }
+        }
+    }
+
+    // 레벨 전환·종료 시 타이머를 명시적으로 정리합니다.
+    // 타이머가 살아있으면 GC 이후 콜백이 호출되어 크래시가 발생할 수 있습니다.
+    GetWorld()->GetTimerManager().ClearTimer(AttackBuffTimerHandle);
+    GetWorld()->GetTimerManager().ClearTimer(MagicComboTimerHandle);
+
+    Super::EndPlay(EndPlayReason);
+}
+
+// 현재 HP·MP·SP 수치를 StatSubsystem에 저장해 레벨 전환 후에도 유지되도록 합니다.
+void UCombatComponent::UpdateStatToSubsystem()
+{
+    UGameInstance* GI = GetWorld()->GetGameInstance();
+    if (!GI) return;
+
+    UStatSubsystem* StatSystem = GI->GetSubsystem<UStatSubsystem>();
+    if (!StatSystem) return;
+
+    StatSystem->SavedCurrentHP = CurrentHP;
+    StatSystem->SavedCurrentMP = CurrentMP;
+    StatSystem->SavedMaxHP     = MaxHP;
+    StatSystem->SavedMaxMP     = MaxMP;
+    StatSystem->SavedCurrentSP = CurrentSP;
+    StatSystem->SavedMaxSP     = MaxSP;
+}
+
+// 매 프레임 마나 자동 회복, 스킬 쿨다운 감소, 공격 중 타겟 방향 자동 회전을 처리합니다.
+void UCombatComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+    Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+    AMyCharacter* Owner = GetCharacterOwner();
+
+    if (CurrentMP < MaxMP)
+    {
+        CurrentMP += (ManaRegenRate * DeltaTime);
+        if (CurrentMP > MaxMP) CurrentMP = MaxMP;
+
+        if (Owner && Owner->PlayerHUD)
+        {
+            Owner->PlayerHUD->UpdateState(CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP);
+        }
+    }
+
+    if (CurrentCooldown_Q > 0.0f)
+    {
+        CurrentCooldown_Q -= DeltaTime;
+        if (CurrentCooldown_Q <= 0.0f) CurrentCooldown_Q = 0.0f;
+    }
+
+    // 공격 중이고 타겟이 있을 때만 타겟 방향으로 부드럽게 회전합니다.
+    if (!Owner || !Owner->HasStateTag("State.Action.Attacking")) return;
+    if (!CachedTargetingComp || !CachedTargetingComp->CurrentTarget) return;
+
+    FVector StartLoc  = Owner->GetActorLocation();
+    FVector TargetLoc = CachedTargetingComp->CurrentTarget->GetActorLocation();
+
+    StartLoc.Z  = 0.0f;
+    TargetLoc.Z = 0.0f;
+
+    FRotator TargetRot = (TargetLoc - StartLoc).Rotation();
+    FRotator NewRot    = FMath::RInterpTo(Owner->GetActorRotation(), TargetRot, DeltaTime, AttackTrackingSpeed);
+
+    Owner->SetActorRotation(NewRot);
+}
+
+// 공격 입력을 받아 현재 상태(공중/지상/콤보 중)에 따라 적절한 공격 루틴으로 분기합니다.
+void UCombatComponent::Attack()
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner) return;
+
+    if (Owner->HasStateTag("State.CC.Stun") || Owner->HasStateTag("State.Action.Rolling")) return;
+    if (Owner->HasStateTag("State.Action.MagicCasting")) return;
+
+    // 공격 중 입력이 들어왔다면 콤보 입력 플래그만 세우고 대기합니다.
+    if (Owner->HasStateTag("State.Action.Attacking"))
+    {
+        bIsComboInputOn = true;
+        return;
+    }
+
+    if (Owner->HasStateTag("State.Movement.InAir"))
+    {
+        PlayJumpAttackAnim();
+    }
+    else
+    {
+        PlayComboAnim();
+    }
+}
+
+// 지상에서의 콤보 공격 애니메이션을 현재 콤보 단계에 맞는 섹션으로 재생합니다.
+void UCombatComponent::PlayComboAnim()
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner) return;
+
+    // 콤보 중에는 캐릭터가 원하는 방향을 자유롭게 바라볼 수 있도록 설정합니다.
+    Owner->bUseControllerRotationYaw = false;
+    if (Owner->GetCharacterMovement())
+    {
+        Owner->GetCharacterMovement()->bOrientRotationToMovement = true;
+    }
+
+    CurrentCombo = FMath::Clamp(CurrentCombo + 1, 1, MaxCombo);
+    Owner->AddStateTag("State.Action.Attacking");
+    bIsComboInputOn = false;
+
+    UAnimInstance* AnimInstance = Owner->GetMesh()->GetAnimInstance();
+    if (!AnimInstance || !ComboActionMontage) return;
+
+    // 루트 모션을 몽타주에서만 받아 공격 이동 거리를 정밀하게 제어합니다.
+    AnimInstance->SetRootMotionMode(ERootMotionMode::RootMotionFromMontagesOnly);
+
+    if (!AnimInstance->Montage_IsPlaying(ComboActionMontage))
+    {
+        AnimInstance->Montage_Play(ComboActionMontage);
+
+        FOnMontageEnded EndDelegate;
+        EndDelegate.BindUObject(this, &UCombatComponent::OnAttackMontageEnded);
+        AnimInstance->Montage_SetEndDelegate(EndDelegate, ComboActionMontage);
+    }
+
+    FString SectionName = FString::Printf(TEXT("Attack%d"), CurrentCombo);
+    AnimInstance->Montage_JumpToSection(FName(*SectionName), ComboActionMontage);
+}
+
+// AnimNotify가 호출될 때 콤보 입력이 있으면 다음 콤보 단계를 바로 재생합니다.
+void UCombatComponent::ProcessComboCommand()
+{
+    if (!bIsComboInputOn) return;
+
+    bIsComboInputOn = false;
+
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner) return;
+
+    if (Owner->HasStateTag("State.Movement.InAir"))
+    {
+        PlayJumpLoopAnim();
+    }
+    else
+    {
+        PlayComboAnim();
+    }
+}
+
+// 공격 몽타주가 끝나면 공격 상태 태그를 제거하고 카메라·이동 방향 설정을 원래대로 복구합니다.
+void UCombatComponent::OnAttackMontageEnded(UAnimMontage* Montage, bool bInterrupted)
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (Owner)
+    {
+        Owner->RemoveStateTag("State.Action.Attacking");
+        Owner->RemoveStateTag(FName("State.Action.JumpLanding"));
+        Owner->RemoveStateTag(FName("State.Action.JumpLoop"));
+
+        UAnimInstance* AnimInstance = Owner->GetMesh()->GetAnimInstance();
+        if (AnimInstance)
+        {
+            AnimInstance->SetRootMotionMode(ERootMotionMode::RootMotionFromMontagesOnly);
+        }
+
+        // 전투 자세면 컨트롤러 Yaw 유지, 아니면 이동 방향 자동 회전으로 복귀합니다.
+        if (Owner->HasStateTag("State.Stance.Combat"))
+        {
+            Owner->bUseControllerRotationYaw = true;
+            if (Owner->GetCharacterMovement()) Owner->GetCharacterMovement()->bOrientRotationToMovement = false;
+        }
+        else
+        {
+            Owner->bUseControllerRotationYaw = false;
+            if (Owner->GetCharacterMovement()) Owner->GetCharacterMovement()->bOrientRotationToMovement = true;
+        }
+    }
+
+    bIsComboInputOn = false;
+    CurrentCombo    = 0;
+}
+
+// 공중에서 공격 키 입력 시 점프 공격 몽타주의 'Start' 섹션을 재생합니다.
+void UCombatComponent::PlayJumpAttackAnim()
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner || !JumpAttackMontage) return;
+
+    Owner->bUseControllerRotationYaw = false;
+    if (Owner->GetCharacterMovement())
+    {
+        Owner->GetCharacterMovement()->bOrientRotationToMovement = true;
+    }
+
+    Owner->AddStateTag(FName("State.Action.Attacking"));
+
+    UAnimInstance* AnimInstance = Owner->GetMesh()->GetAnimInstance();
+    if (!AnimInstance) return;
+
+    // 공중이므로 루트 모션을 무시하고 물리 이동을 그대로 유지합니다.
+    AnimInstance->SetRootMotionMode(ERootMotionMode::IgnoreRootMotion);
+
+    AnimInstance->Montage_Play(JumpAttackMontage);
+
+    FOnMontageEnded EndDelegate;
+    EndDelegate.BindUObject(this, &UCombatComponent::OnAttackMontageEnded);
+    AnimInstance->Montage_SetEndDelegate(EndDelegate, JumpAttackMontage);
+}
+
+// 점프 공격 'Start' 섹션이 끝나면 'Loop' 섹션으로 이동해 착지 대기 상태로 전환합니다.
+void UCombatComponent::PlayJumpLoopAnim()
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner || !JumpAttackMontage) return;
+
+    UAnimInstance* AnimInstance = Owner->GetMesh()->GetAnimInstance();
+    if (!AnimInstance || !AnimInstance->Montage_IsPlaying(JumpAttackMontage)) return;
+
+    AnimInstance->Montage_JumpToSection(FName("Loop"), JumpAttackMontage);
+}
+
+// 착지 시 현재 재생 중인 점프 공격 섹션에 따라 'End' 섹션으로 전환하거나 몽타주를 강제 종료합니다.
+void UCombatComponent::PlayJumpLandingAnim()
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner || !JumpAttackMontage) return;
+
+    UAnimInstance* AnimInstance = Owner->GetMesh()->GetAnimInstance();
+    if (!AnimInstance || !AnimInstance->Montage_IsPlaying(JumpAttackMontage)) return;
+
+    FName CurrentSection = AnimInstance->Montage_GetCurrentSection(JumpAttackMontage);
+
+    if (CurrentSection == FName("Loop"))
+    {
+        Owner->AddStateTag(FName("State.Action.JumpLanding"));
+        AnimInstance->SetRootMotionMode(ERootMotionMode::RootMotionFromMontagesOnly);
+        AnimInstance->Montage_JumpToSection(FName("End"), JumpAttackMontage);
+    }
+    else if (CurrentSection == FName("Start"))
+    {
+        // Start 구간에 너무 빨리 착지하면 즉시 몽타주를 중단하고 상태를 초기화합니다.
+        AnimInstance->Montage_Stop(0.1f, JumpAttackMontage);
+        EndWeaponTrace();
+
+        bIsComboInputOn = false;
+        Owner->RemoveStateTag(FName("State.Action.Attacking"));
+        Owner->RemoveStateTag(FName("State.Action.JumpLoop"));
+        Owner->RemoveStateTag(FName("State.Action.JumpLanding"));
+    }
+}
+
+// AnimNotifyState에서 무기 충돌을 켜거나 끄는 플래그를 설정합니다. (현재 트레이스 방식으로 대체)
+void UCombatComponent::SetWeaponCollision(bool bEnable)
+{
+    bIsWeaponEnabled = bEnable;
+}
+
+// 마나를 소모하고 Q 스킬 몽타주를 재생합니다. 쿨다운 중이거나 마나가 부족하면 실행하지 않습니다.
+void UCombatComponent::SkillQ()
+{
+    if (CurrentCooldown_Q > 0.0f) return;
+
+    float SkillCost = 20.0f;
+    if (CurrentMP < SkillCost) return;
+
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner || !SkillMontage) return;
+
+    CurrentMP -= SkillCost;
+    CurrentCooldown_Q = MaxCooldown_Q;
+
+    UpdateStatToSubsystem();
+
+    if (Owner->PlayerHUD)
+    {
+        Owner->PlayerHUD->UpdateState(CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP);
+    }
+
+    UAnimInstance* AnimInstance = Owner->GetMesh()->GetAnimInstance();
+    if (!AnimInstance) return;
+
+    AnimInstance->Montage_Play(SkillMontage);
+
+    FOnMontageEnded EndDelegate;
+    EndDelegate.BindUObject(this, &UCombatComponent::OnAttackMontageEnded);
+    AnimInstance->Montage_SetEndDelegate(EndDelegate, SkillMontage);
+}
+
+// 외부에서 체력 회복 요청을 받아 HP를 최대치를 넘지 않게 증가시키고 HUD를 갱신합니다.
+void UCombatComponent::Heal(float Amount)
+{
+    CurrentHP = FMath::Clamp(CurrentHP + Amount, 0.0f, MaxHP);
+
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (Owner && Owner->PlayerHUD)
+    {
+        Owner->PlayerHUD->UpdateState(CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP);
+    }
+
+    UpdateStatToSubsystem();
+}
+
+// 외부에서 마나 회복 요청을 받아 MP를 최대치를 넘지 않게 증가시키고 HUD를 갱신합니다.
+void UCombatComponent::RestoreMana(float Amount)
+{
+    CurrentMP = FMath::Clamp(CurrentMP + Amount, 0.0f, MaxMP);
+
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (Owner && Owner->PlayerHUD)
+    {
+        Owner->PlayerHUD->UpdateState(CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP);
+    }
+
+    UpdateStatToSubsystem();
+}
+
+// 기본 공격력을 지정한 양만큼 증가시킵니다. 버프 적용·해제 시 양수·음수로 호출합니다.
+void UCombatComponent::IncreaseAttackPower(float Amount)
+{
+    BaseAttackPower += Amount;
+    UpdateStatToSubsystem();
+}
+
+// 무기 트레이스 시작 시 중복 타격 방지를 위한 히트 목록을 초기화하고 공격 데이터를 캐싱합니다.
+void UCombatComponent::StartWeaponTrace(FName HitAttackID)
+{
+    CurrentAttackID  = HitAttackID;
+    AlreadyHitActors.Empty();
+
+    // 공격 시작 시 한 번만 DataTable을 조회해 캐싱합니다.
+    CachedAttackData = AttackDataTable ? AttackDataTable->FindRow<FAttackData>(HitAttackID, TEXT("")) : nullptr;
+}
+
+// 무기 트레이스를 종료하고 관련 데이터를 초기화합니다.
+void UCombatComponent::EndWeaponTrace()
+{
+    CurrentAttackID  = NAME_None;
+    AlreadyHitActors.Empty();
+    CachedAttackData = nullptr;
+}
+
+// AnimNotifyState의 Tick에서 호출되며, 무기 소켓 위치로 SweepTrace해 적에게 피해를 입힙니다.
+// TSet(AlreadyHitActors)으로 한 공격당 동일 적에게 중복 피해가 가지 않도록 방지합니다.
+void UCombatComponent::WeaponTraceTick()
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner || CurrentAttackID.IsNone() || !AttackDataTable) return;
+
+    if (!CachedWeaponMesh) return;
+
+    FVector BaseLoc = CachedWeaponMesh->GetSocketLocation(FName("Base"));
+    FVector TipLoc  = CachedWeaponMesh->GetSocketLocation(FName("Tip"));
+
+    TArray<FHitResult> HitResults;
+    FCollisionQueryParams QueryParams;
+    QueryParams.AddIgnoredActor(Owner);
+    QueryParams.AddIgnoredActor(CurrentWeapon);
+
+    float BladeThickness = 10.0f;
+    bool bHit = GetWorld()->SweepMultiByChannel(
+        HitResults,
+        BaseLoc, TipLoc, FQuat::Identity,
+        ECC_WeaponTrace,
+        FCollisionShape::MakeSphere(BladeThickness),
+        QueryParams
+    );
+
+    if (!bHit) return;
+    if (!CachedAttackData) return;
+
+    float FinalDamage = BaseAttackPower * CachedAttackData->DamageMultiplier;
+
+    for (const FHitResult& Hit : HitResults)
+    {
+        AActor* HitActor = Hit.GetActor();
+
+        // 이미 이번 공격에서 피해를 준 대상이면 건너뜁니다.
+        if (!HitActor || AlreadyHitActors.Contains(HitActor)) continue;
+
+        AlreadyHitActors.Add(HitActor);
+
+        AEnemy* HitEnemy = Cast<AEnemy>(HitActor);
+        if (HitEnemy && HitEnemy->bIsDead) continue;
+
+        UGameplayStatics::ApplyDamage(HitActor, FinalDamage, Owner->GetController(), Owner, UDamageType::StaticClass());
+
+        // 히트 위치에 이펙트 스폰 (Niagara 우선, 없으면 Cascade)
+        if (HitEffect)
+        {
+            UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+                GetWorld(), HitEffect,
+                Hit.ImpactPoint, Hit.ImpactNormal.Rotation());
+        }
+        else if (HitEffectCascade)
+        {
+            UGameplayStatics::SpawnEmitterAtLocation(
+                GetWorld(), HitEffectCascade,
+                Hit.ImpactPoint, Hit.ImpactNormal.Rotation());
+        }
+
+        Owner->OnSpawnDamageText(Hit.ImpactPoint, FinalDamage);
+        Owner->EnterCombatStance();
+    }
+}
+
+// 특정 공격 타입 히트를 실행하기 위해 예약된 함수입니다. (현재 미구현)
+void UCombatComponent::ExecuteAttackHit(FName HitAttackID)
+{
+}
+
+// 피해를 받아 HP를 감소시킵니다. HP가 0 이하가 되면 사망 처리를 추가할 위치입니다.
+void UCombatComponent::ReceiveDamage(float DamageAmount)
+{
+    if (DamageAmount <= 0.0f || CurrentHP <= 0.0f) return;
+
+    CurrentHP -= DamageAmount;
+    CurrentHP  = FMath::Max(0.0f, CurrentHP);
+
+    if (CurrentHP <= 0.0f)
+    {
+        // TODO: 캐릭터 사망 처리
+    }
+}
+
+// 우클릭 입력 시 타겟이 존재하고 마나가 충분하면 마법 콤보 몽타주를 재생합니다.
+void UCombatComponent::RightClickMagicAttack()
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner || Owner->HasStateTag("State.CC.Stun") || Owner->HasStateTag("State.Action.Rolling") || Owner->HasStateTag("State.Action.Attacking")) return;
+    if (Owner->HasStateTag("State.Action.MagicCasting")) return;
+
+    // 타겟이 없으면 마법을 시전하지 않습니다.
+    if (!Owner->TargetingComp || !Owner->TargetingComp->CurrentTarget)
+    {
+        return;
+    }
+
+    UAnimInstance* AnimInstance = Owner->GetMesh()->GetAnimInstance();
+    if (!AnimInstance || !MagicComboMontage) return;
+    if (AnimInstance->Montage_IsPlaying(MagicComboMontage)) return;
+
+    float MagicCost = 15.0f;
+
+    if (CurrentMP < MagicCost)
+    {
+        // 마나 부족 시 WarningSubsystem을 통해 경고 메시지를 화면에 표시합니다.
+        if (Owner->GetGameInstance())
+        {
+            UWarningSubsystem* WarningSys = Owner->GetGameInstance()->GetSubsystem<UWarningSubsystem>();
+            if (WarningSys)
+            {
+                FText WarningText = FText::FromStringTable(
+                    TEXT("/Game/character/ST_WarningMessages.ST_WarningMessages"),
+                    TEXT("Err_NotEnoughMP"));
+                WarningSys->ShowWarning(WarningText);
+            }
+        }
+        return;
+    }
+
+    CurrentMP -= MagicCost;
+    UpdateStatToSubsystem();
+
+    if (Owner->PlayerHUD)
+    {
+        Owner->PlayerHUD->UpdateState(CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP);
+    }
+
+    CurrentMagicCombo = FMath::Clamp(CurrentMagicCombo + 1, 1, MaxMagicCombo);
+    GetWorld()->GetTimerManager().ClearTimer(MagicComboTimerHandle);
+
+    // MagicCasting 태그를 부여해 이동 함수에서 공격 중 이동을 차단합니다.
+    Owner->AddStateTag("State.Action.MagicCasting");
+    Owner->EnterCombatStance();
+
+    AnimInstance->Montage_Play(MagicComboMontage);
+
+    FOnMontageEnded EndDelegate;
+    EndDelegate.BindUObject(this, &UCombatComponent::OnMagicMontageEnded);
+    AnimInstance->Montage_SetEndDelegate(EndDelegate, MagicComboMontage);
+
+    FString SectionName = FString::Printf(TEXT("Attack%d"), CurrentMagicCombo);
+    AnimInstance->Montage_JumpToSection(FName(*SectionName), MagicComboMontage);
+}
+
+// 마법 몽타주가 끝나면 MagicCasting 태그를 제거하고 콤보 리셋 타이머를 설정합니다.
+void UCombatComponent::OnMagicMontageEnded(UAnimMontage* Montage, bool bInterrupted)
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner) return;
+
+    Owner->RemoveStateTag("State.Action.MagicCasting");
+
+    if (!bInterrupted && CurrentMagicCombo < MaxMagicCombo)
+    {
+        // 2초 안에 다시 마법을 시전하면 콤보가 이어집니다.
+        GetWorld()->GetTimerManager().SetTimer(MagicComboTimerHandle, this, &UCombatComponent::ResetMagicCombo, 2.0f, false);
+    }
+    else
+    {
+        ResetMagicCombo();
+    }
+}
+
+// 마법 콤보 카운터를 0으로 초기화하고 콤보 유지 타이머를 해제합니다.
+void UCombatComponent::ResetMagicCombo()
+{
+    CurrentMagicCombo = 0;
+    GetWorld()->GetTimerManager().ClearTimer(MagicComboTimerHandle);
+}
+
+// AnimNotify에서 호출되며, 현재 타겟 위치에 마법 이펙트(Niagara)를 스폰합니다.
+void UCombatComponent::SpawnMagicVFX()
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner || !Owner->TargetingComp || !Owner->TargetingComp->CurrentTarget) return;
+
+    // 타겟 위치를 캐싱해 이후 ApplyMagicDamage에서 재사용합니다.
+    CachedMagicLocation = Owner->TargetingComp->CurrentTarget->GetActorLocation();
+
+    int32 EffectIndex = CurrentMagicCombo - 1;
+    if (MagicExplosionVFXs.IsValidIndex(EffectIndex) && MagicExplosionVFXs[EffectIndex] != nullptr)
+    {
+        UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+            GetWorld(),
+            MagicExplosionVFXs[EffectIndex],
+            CachedMagicLocation,
+            FRotator::ZeroRotator,
+            FVector(1.0f),
+            true, true,
+            ENCPoolMethod::AutoRelease);
+    }
+}
+
+// AnimNotify에서 호출되며, 캐싱된 타겟 위치 주변을 SphereTrace해 범위 내 적에게 마법 피해를 입힙니다.
+void UCombatComponent::ApplyMagicDamage()
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner || !AttackDataTable) return;
+
+    FString RowNameStr  = FString::Printf(TEXT("Magic%d"), CurrentMagicCombo);
+    FName   MagicAttackID = FName(*RowNameStr);
+    FAttackData* Data   = AttackDataTable->FindRow<FAttackData>(MagicAttackID, TEXT("MagicExplosion"));
+    if (!Data) return;
+
+    float FinalDamage  = BaseAttackPower * Data->DamageMultiplier;
+    float DamageRadius = 300.0f;
+
+    TArray<AActor*>     IgnoredActors;
+    TArray<FHitResult>  HitResults;
+    IgnoredActors.Add(Owner);
+
+    bool bHit = UKismetSystemLibrary::SphereTraceMulti(
+        GetWorld(),
+        CachedMagicLocation, CachedMagicLocation, DamageRadius,
+        UEngineTypes::ConvertToTraceType(ECC_GameTraceChannel1),
+        false, IgnoredActors,
+        EDrawDebugTrace::None,
+        HitResults, true,
+        FLinearColor::Red, FLinearColor::Green, 2.0f);
+
+    if (bHit)
+    {
+        TArray<AActor*> DamagedActors;
+
+        for (const FHitResult& Hit : HitResults)
+        {
+            AActor* HitActor = Hit.GetActor();
+
+            if (HitActor && !DamagedActors.Contains(HitActor))
+            {
+                APawn* HitPawn = Cast<APawn>(HitActor);
+                if (HitPawn)
+                {
+                    AEnemy* HitEnemy = Cast<AEnemy>(HitPawn);
+                    if (HitEnemy && HitEnemy->bIsDead) continue;
+
+                    UGameplayStatics::ApplyDamage(HitPawn, FinalDamage, Owner->GetController(), Owner, UDamageType::StaticClass());
+                    Owner->OnSpawnDamageText(Hit.ImpactPoint, FinalDamage);
+                    DamagedActors.Add(HitActor);
+                }
+            }
+        }
+    }
+
+    Owner->EnterCombatStance();
+}
+
+// 스킬 또는 아이템 버프를 적용합니다. bFromItem 플래그로 두 경로를 완전히 분리해 중첩을 허용합니다.
+void UCombatComponent::ApplyAttackBuff(float Amount, float Duration, FName BuffID, bool bFromItem)
+{
+    if (bFromItem)
+    {
+        // 아이템 버프 경로: 스킬 버프와 독립적으로 관리
+        if (bIsItemAttackBuffActive) return;
+
+        bIsItemAttackBuffActive    = true;
+        ActiveItemAttackBuffAmount = Amount;
+        ActiveItemAttackBuffID     = BuffID;
+
+        IncreaseAttackPower(Amount);
+        GetWorld()->GetTimerManager().SetTimer(ItemAttackBuffTimerHandle, this, &UCombatComponent::RemoveItemAttackBuff, Duration, false);
+    }
+    else
+    {
+        // 스킬 버프 경로
+        if (bIsAttackBuffActive) return;
+
+        bIsAttackBuffActive    = true;
+        ActiveAttackBuffAmount = Amount;
+        ActiveAttackBuffID     = BuffID;
+
+        IncreaseAttackPower(Amount);
+        GetWorld()->GetTimerManager().SetTimer(AttackBuffTimerHandle, this, &UCombatComponent::RemoveAttackBuff, Duration, false);
+    }
+
+    if (OnCombatBuffUpdated.IsBound())
+    {
+        OnCombatBuffUpdated.Broadcast();
+    }
+}
+
+// 스킬 버프 타이머가 만료되면 공격력을 원래대로 되돌리고 버프 상태를 초기화합니다.
+void UCombatComponent::RemoveAttackBuff()
+{
+    bIsAttackBuffActive    = false;
+    IncreaseAttackPower(-ActiveAttackBuffAmount);
+    ActiveAttackBuffAmount = 0.0f;
+    ActiveAttackBuffID     = NAME_None;
+
+    if (OnCombatBuffUpdated.IsBound())
+    {
+        OnCombatBuffUpdated.Broadcast();
+    }
+}
+
+// 아이템 버프 타이머가 만료되면 공격력을 원래대로 되돌리고 아이템 버프 상태를 초기화합니다.
+void UCombatComponent::RemoveItemAttackBuff()
+{
+    bIsItemAttackBuffActive    = false;
+    IncreaseAttackPower(-ActiveItemAttackBuffAmount);
+    ActiveItemAttackBuffAmount = 0.0f;
+    ActiveItemAttackBuffID     = NAME_None;
+
+    if (OnCombatBuffUpdated.IsBound())
+    {
+        OnCombatBuffUpdated.Broadcast();
+    }
+}
