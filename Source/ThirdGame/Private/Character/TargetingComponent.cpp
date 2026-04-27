@@ -2,18 +2,15 @@
 // TargetingComponent.cpp
 //
 // [파일 역할]
-// 플레이어(카메라) 시점을 기준으로 화면 중앙에 가장 가까운 적을 자동으로 스캔하여
-// 타겟팅하는 컴포넌트입니다.
-// 거리, 시야각(내적), 그리고 시야 차단 여부 확인(Line Trace)을 필터로 사용하여
-// 최적 타겟을 선정합니다.
+// 카메라 전방으로 구체를 스윕(SweepMultiByChannel)하여
+// 경로상의 적 중 가장 가까운 적을 자동으로 타겟팅하는 컴포넌트입니다.
 //
 // [타겟 선정 기준]
 // 1. 컷신 중이면 즉시 비활성화 (State.Cutscene 태그 확인)
-// 2. Overlap Sphere로 TraceDistance 반경 내 액터를 물리 엔진에서 직접 수집
+// 2. 카메라 전방으로 SweepRadius 폭, TraceDistance 길이의 구체 스윕
 // 3. AEnemy로 캐스트 가능하고 살아있는 적만 필터링
-// 4. 카메라 전방 내적값 0.85 이상 (시야각 필터)
+// 4. 스윕 결과는 거리순 정렬 → 첫 번째 유효한 적이 가장 가까운 적
 // 5. 카메라~적 사이 LineTrace로 벽 차단 여부 확인
-// 6. 위 조건을 통과한 것 중 내적값이 가장 높은 적을 타겟으로 선정
 // =========================================================================================
 
 #include "TargetingComponent.h"
@@ -22,16 +19,17 @@
 #include "DrawDebugHelpers.h"
 #include "Enemy.h"
 #include "Character/MyCharacter.h"
-#include "Engine/OverlapResult.h"
 
 // 컴포넌트 생성 시 틱 활성화 및 초기 타겟을 nullptr로 초기화합니다.
+// TickInterval을 0.1초로 설정해 매 프레임 대신 초당 10회만 스캔합니다.
 UTargetingComponent::UTargetingComponent()
 {
     PrimaryComponentTick.bCanEverTick = true;
+    PrimaryComponentTick.TickInterval = 0.1f;
     CurrentTarget = nullptr;
 }
 
-// 매 프레임마다 FindTarget을 호출하여 화면 중심에 가장 가까운 적을 갱신합니다.
+// 0.1초 간격으로 FindTarget을 호출하여 화면 중심에 가장 가까운 적을 갱신합니다.
 void UTargetingComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
@@ -39,7 +37,7 @@ void UTargetingComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
     FindTarget();
 }
 
-// 카메라 시점 기준으로 화면 중심에 가장 가까운 살아있는 적(Enemy) 액터를 찾아냅니다.
+// 카메라 전방 스윕으로 가장 가까운 살아있는 적(Enemy)을 찾아 타겟팅합니다.
 void UTargetingComponent::FindTarget()
 {
     // 컷신 중에는 타겟팅을 비활성화합니다.
@@ -56,76 +54,78 @@ void UTargetingComponent::FindTarget()
         }
     }
 
-    // 카메라 위치와 방향을 구하기 위해 플레이어 컨트롤러가 필요합니다.
     APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
     if (!PC) return;
 
     FVector CameraLocation;
     FRotator CameraRotation;
     PC->GetPlayerViewPoint(CameraLocation, CameraRotation);
-
     FVector CameraForward = CameraRotation.Vector();
 
-    // Overlap Sphere로 TraceDistance 반경 내 액터를 물리 엔진에서 직접 수집합니다.
-    // 전역 목록 없이 거리 필터를 물리 엔진이 처리하므로 별도 거리 계산이 불필요합니다.
-    TArray<FOverlapResult> Overlaps;
-    FCollisionShape Sphere = FCollisionShape::MakeSphere(TraceDistance);
-    FCollisionQueryParams SphereQueryParams;
-    SphereQueryParams.AddIgnoredActor(GetOwner());
+    // 카메라 전방으로 구체를 스윕하여 경로상의 적을 거리순으로 수집합니다.
+    TArray<FHitResult> HitResults;
+    FCollisionQueryParams SweepParams;
+    SweepParams.AddIgnoredActor(GetOwner());
 
-    GetWorld()->OverlapMultiByChannel(
-        Overlaps,
+    GetWorld()->SweepMultiByChannel(
+        HitResults,
         CameraLocation,
+        CameraLocation + CameraForward * TraceDistance,
         FQuat::Identity,
         ECC_Pawn,
-        Sphere,
-        SphereQueryParams
+        FCollisionShape::MakeSphere(SweepRadius),
+        SweepParams
     );
 
     AActor* BestTarget = nullptr;
-    float HighestDotProduct = -1.0f;
 
-    for (FOverlapResult& Overlap : Overlaps)
+    // 결과가 거리순으로 정렬되므로 조건을 통과하는 첫 번째 적이 가장 가까운 타겟입니다.
+    for (FHitResult& Hit : HitResults)
     {
-        AEnemy* Enemy = Cast<AEnemy>(Overlap.GetActor());
+        AEnemy* Enemy = Cast<AEnemy>(Hit.GetActor());
         if (!Enemy) continue;
+        if (Enemy->IsHidden() || Enemy->bIsDead || !Enemy->bIsTargetable) continue;
 
-        if (Enemy->IsHidden()) continue;
-        if (Enemy->bIsDead || !Enemy->bIsTargetable) continue;
-
-        // 카메라 전방 벡터와 적 방향 벡터의 내적으로 시야각을 계산합니다.
+        // 카메라 전방 기준 30도(cos 0.866) 이내의 적만 허용합니다.
         FVector DirectionToEnemy = (Enemy->GetActorLocation() - CameraLocation).GetSafeNormal();
-        float DotProduct = FVector::DotProduct(CameraForward, DirectionToEnemy);
-
-        // 시야각 임계값(0.85) 미만이면 화면 가장자리에 있으므로 제외합니다.
-        if (DotProduct <= 0.85f) continue;
-
-        // 이미 발견된 타겟보다 화면 중심에 더 가깝지 않으면 건너뜁니다.
-        if (DotProduct <= HighestDotProduct) continue;
+        if (FVector::DotProduct(CameraForward, DirectionToEnemy) < 0.707f) continue;
 
         // 카메라~적 사이 벽 차단 여부를 LineTrace로 확인합니다.
-        FHitResult HitResult;
-        FCollisionQueryParams LineQueryParams;
-        LineQueryParams.AddIgnoredActor(GetOwner());
-        LineQueryParams.AddIgnoredActor(Enemy);
+        FHitResult WallHit;
+        FCollisionQueryParams LineParams;
+        LineParams.AddIgnoredActor(GetOwner());
+        LineParams.AddIgnoredActor(Enemy);
 
         bool bHitWall = GetWorld()->LineTraceSingleByChannel(
-            HitResult,
+            WallHit,
             CameraLocation,
             Enemy->GetActorLocation(),
             ECC_Visibility,
-            LineQueryParams
+            LineParams
         );
 
-        // 시야에 벽이나 장애물이 없는 경우만 최적 타겟으로 갱신합니다.
         if (!bHitWall)
         {
-            HighestDotProduct = DotProduct;
             BestTarget = Enemy;
+            break; // 가장 가까운 유효한 적 하나만 선택합니다.
         }
     }
 
-    // 찾아낸 최적 타겟(BestTarget)이 이전과 다른 경우에만 마커(시각 피드백) 처리합니다.
+ #if ENABLE_DRAW_DEBUG
+     if (bShowDebug)
+     {
+         FVector EndPoint = CameraLocation + CameraForward * TraceDistance;
+         DrawDebugLine(GetWorld(), CameraLocation, EndPoint, FColor::Yellow, false, 0.15f, 0, 2.0f);
+         DrawDebugCone(GetWorld(), CameraLocation, CameraForward, TraceDistance,
+             FMath::DegreesToRadians(30.0f), FMath::DegreesToRadians(30.0f),
+             16, FColor::Green, false, 0.15f);
+         DrawDebugSphere(GetWorld(), EndPoint, SweepRadius, 16, FColor::Yellow, false, 0.15f);
+         if (BestTarget)
+             DrawDebugSphere(GetWorld(), BestTarget->GetActorLocation(), 80.0f, 12, FColor::Red, false, 0.15f);
+     }
+ #endif
+
+    // 타겟이 변경된 경우에만 마커(시각 피드백)를 갱신합니다.
     if (CurrentTarget != BestTarget)
     {
         if (AEnemy* OldEnemy = Cast<AEnemy>(CurrentTarget))
