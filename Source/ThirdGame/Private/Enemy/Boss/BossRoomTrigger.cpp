@@ -57,7 +57,7 @@ void ABossRoomTrigger::OnOverlapBegin(UPrimitiveComponent* OverlappedComp, AActo
 		{
 			CachedPlayer = Cast<AMyCharacter>(PlayerChar);
 
-			// HUDRoot 하나만 Hidden으로 설정하면 모든 자식 HUD가 함께 사라집니다.
+			// 컷신 중에는 HUDRoot 전체를 숨겨 모든 자식 HUD를 한 번에 비활성화합니다.
 			if (CachedPlayer && CachedPlayer->HUDRoot)
 			{
 				CachedPlayer->HUDRoot->SetVisibility(ESlateVisibility::Hidden);
@@ -82,7 +82,7 @@ void ABossRoomTrigger::OnCutsceneFinished()
 {
 	if (!CachedPlayer) return;
 
-	// HUDRoot를 Visible로 되돌리면 모든 자식 HUD가 함께 복구됩니다.
+	// 컷신이 끝나면 HUDRoot 전체를 다시 표시합니다.
 	if (CachedPlayer->HUDRoot)
 	{
 		CachedPlayer->HUDRoot->SetVisibility(ESlateVisibility::Visible);

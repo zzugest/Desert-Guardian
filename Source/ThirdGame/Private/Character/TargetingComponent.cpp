@@ -9,8 +9,8 @@
 //
 // [타겟 선정 기준]
 // 1. 컷신 중이면 즉시 비활성화 (State.Cutscene 태그 확인)
-// 2. AllActiveEnemies 목록 순회 (GetAllActorsOfClass 대신 정적 목록 참조)
-// 3. 거리 3000 유닛 이내
+// 2. Overlap Sphere로 TraceDistance 반경 내 액터를 물리 엔진에서 직접 수집
+// 3. AEnemy로 캐스트 가능하고 살아있는 적만 필터링
 // 4. 카메라 전방 내적값 0.85 이상 (시야각 필터)
 // 5. 카메라~적 사이 LineTrace로 벽 차단 여부 확인
 // 6. 위 조건을 통과한 것 중 내적값이 가장 높은 적을 타겟으로 선정
@@ -22,6 +22,7 @@
 #include "DrawDebugHelpers.h"
 #include "Enemy.h"
 #include "Character/MyCharacter.h"
+#include "Engine/OverlapResult.h"
 
 // 컴포넌트 생성 시 틱 활성화 및 초기 타겟을 nullptr로 초기화합니다.
 UTargetingComponent::UTargetingComponent()
@@ -46,7 +47,6 @@ void UTargetingComponent::FindTarget()
     {
         if (Owner->HasStateTag("State.Cutscene"))
         {
-            // 기존 타겟이 있으면 마커를 제거하고 초기화합니다.
             if (AEnemy* OldEnemy = Cast<AEnemy>(CurrentTarget))
             {
                 OldEnemy->SetTargetMarkerVisibility(false);
@@ -66,29 +66,35 @@ void UTargetingComponent::FindTarget()
 
     FVector CameraForward = CameraRotation.Vector();
 
-    // GetAllActorsOfClass() 대신 Enemy가 스폰/사망 시 자체 관리하는 목록을 직접 참조합니다.
+    // Overlap Sphere로 TraceDistance 반경 내 액터를 물리 엔진에서 직접 수집합니다.
+    // 전역 목록 없이 거리 필터를 물리 엔진이 처리하므로 별도 거리 계산이 불필요합니다.
+    TArray<FOverlapResult> Overlaps;
+    FCollisionShape Sphere = FCollisionShape::MakeSphere(TraceDistance);
+    FCollisionQueryParams SphereQueryParams;
+    SphereQueryParams.AddIgnoredActor(GetOwner());
+
+    GetWorld()->OverlapMultiByChannel(
+        Overlaps,
+        CameraLocation,
+        FQuat::Identity,
+        ECC_Pawn,
+        Sphere,
+        SphereQueryParams
+    );
+
     AActor* BestTarget = nullptr;
     float HighestDotProduct = -1.0f;
-    float MaxTargetRange = 3000.0f;
 
-    for (TWeakObjectPtr<AEnemy>& WeakEnemy : AEnemy::AllActiveEnemies)
+    for (FOverlapResult& Overlap : Overlaps)
     {
-        // GC에 의해 이미 수거된 객체는 안전하게 건너뜁니다.
-        if (!WeakEnemy.IsValid()) continue;
-        AEnemy* Enemy = WeakEnemy.Get();
+        AEnemy* Enemy = Cast<AEnemy>(Overlap.GetActor());
+        if (!Enemy) continue;
 
         if (Enemy->IsHidden()) continue;
-
         if (Enemy->bIsDead || !Enemy->bIsTargetable) continue;
 
-        FVector DirectionToEnemy = (Enemy->GetActorLocation() - CameraLocation);
-
-        // Size() 대신 SizeSquared()로 sqrt 연산 없이 거리를 비교합니다.
-        if (DirectionToEnemy.SizeSquared() > MaxTargetRange * MaxTargetRange) continue;
-
-        DirectionToEnemy.Normalize();
-
         // 카메라 전방 벡터와 적 방향 벡터의 내적으로 시야각을 계산합니다.
+        FVector DirectionToEnemy = (Enemy->GetActorLocation() - CameraLocation).GetSafeNormal();
         float DotProduct = FVector::DotProduct(CameraForward, DirectionToEnemy);
 
         // 시야각 임계값(0.85) 미만이면 화면 가장자리에 있으므로 제외합니다.
@@ -97,18 +103,18 @@ void UTargetingComponent::FindTarget()
         // 이미 발견된 타겟보다 화면 중심에 더 가깝지 않으면 건너뜁니다.
         if (DotProduct <= HighestDotProduct) continue;
 
-        // 카메라 사이나 시야가 벽 뒤에 가려져 있는지 판별하기 위해 선형체 벽 검사합니다.
+        // 카메라~적 사이 벽 차단 여부를 LineTrace로 확인합니다.
         FHitResult HitResult;
-        FCollisionQueryParams QueryParams;
-        QueryParams.AddIgnoredActor(GetOwner());
-        QueryParams.AddIgnoredActor(Enemy);
+        FCollisionQueryParams LineQueryParams;
+        LineQueryParams.AddIgnoredActor(GetOwner());
+        LineQueryParams.AddIgnoredActor(Enemy);
 
         bool bHitWall = GetWorld()->LineTraceSingleByChannel(
             HitResult,
             CameraLocation,
             Enemy->GetActorLocation(),
             ECC_Visibility,
-            QueryParams
+            LineQueryParams
         );
 
         // 시야에 벽이나 장애물이 없는 경우만 최적 타겟으로 갱신합니다.

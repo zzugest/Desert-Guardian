@@ -22,6 +22,7 @@
 #include "Portal/PortalConfirmWidget.h"
 #include "NPC/Quest/QuestComponent.h"
 #include "Enemy/Enemy.h"
+#include "MinimapSubsystem.h"
 
 // 충돌 박스와 상호작용 프롬프트 위젯 컴포넌트를 생성합니다.
 AMapPortal::AMapPortal()
@@ -183,17 +184,43 @@ void AMapPortal::CheckAndApplyPortalState()
     }
 
     // 조건 충족 시 포탈을 표시하고 충돌을 활성화, 미충족 시 숨기고 비활성화합니다.
+    UMinimapSubsystem* MinimapSys = nullptr;
+    if (UGameInstance* GI = GetGameInstance())
+    {
+        MinimapSys = GI->GetSubsystem<UMinimapSubsystem>();
+    }
+
     if (bShouldBeActive)
     {
         SetActorHiddenInGame(false);
         SetActorEnableCollision(true);
+
+        // 포탈이 활성화될 때 미니맵에 파란 점으로 등록합니다.
+        if (MinimapSys) MinimapSys->RegisterMarker(this, EMinimapMarkerType::Portal);
     }
     else
     {
         SetActorHiddenInGame(true);
         SetActorEnableCollision(false);
         if (InteractPromptWidget) InteractPromptWidget->SetVisibility(false);
+
+        // 포탈이 비활성화될 때 미니맵에서 제거합니다.
+        if (MinimapSys) MinimapSys->UnregisterMarker(this);
     }
+}
+
+// 레벨 종료 시 미니맵 마커를 해제합니다.
+void AMapPortal::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    if (UGameInstance* GI = GetGameInstance())
+    {
+        if (UMinimapSubsystem* MinimapSys = GI->GetSubsystem<UMinimapSubsystem>())
+        {
+            MinimapSys->UnregisterMarker(this);
+        }
+    }
+
+    Super::EndPlay(EndPlayReason);
 }
 
 // 보스 처치 델리게이트 콜백: 보스 사망 플래그를 세우고 포탈 상태를 재검사합니다.

@@ -17,6 +17,7 @@
 #include "UISubsystem.h"
 #include "Components/WidgetComponent.h"
 #include "UObject/ConstructorHelpers.h"
+#include "MinimapSubsystem.h"
 
 // 메시, 상호작용 박스, 화면 공간 프롬프트 위젯을 생성하고 기본값을 설정합니다.
 ABaseNPC::ABaseNPC()
@@ -48,7 +49,7 @@ ABaseNPC::ABaseNPC()
     }
 }
 
-// 상호작용 박스 Overlap 이벤트를 바인딩합니다.
+// 상호작용 박스 Overlap 이벤트를 바인딩하고 미니맵에 NPC를 등록합니다.
 void ABaseNPC::BeginPlay()
 {
     Super::BeginPlay();
@@ -58,6 +59,29 @@ void ABaseNPC::BeginPlay()
         InteractionZone->OnComponentBeginOverlap.AddDynamic(this, &ABaseNPC::OnInteractZoneBeginOverlap);
         InteractionZone->OnComponentEndOverlap.AddDynamic(this, &ABaseNPC::OnInteractZoneEndOverlap);
     }
+
+    // 미니맵에 노란 점으로 표시되도록 서브시스템에 등록합니다.
+    if (UGameInstance* GI = GetGameInstance())
+    {
+        if (UMinimapSubsystem* MinimapSys = GI->GetSubsystem<UMinimapSubsystem>())
+        {
+            MinimapSys->RegisterMarker(this, EMinimapMarkerType::NPC);
+        }
+    }
+}
+
+// 레벨 종료 시 미니맵 마커를 해제합니다.
+void ABaseNPC::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    if (UGameInstance* GI = GetGameInstance())
+    {
+        if (UMinimapSubsystem* MinimapSys = GI->GetSubsystem<UMinimapSubsystem>())
+        {
+            MinimapSys->UnregisterMarker(this);
+        }
+    }
+
+    Super::EndPlay(EndPlayReason);
 }
 
 // 서브클래스가 재정의하는 상호작용 진입점입니다. 기본 구현은 비어 있습니다.

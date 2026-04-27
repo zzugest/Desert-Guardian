@@ -78,6 +78,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "UI")
 	TSubclassOf<UHUDRootWidget> HUDRootClass;
 
+
 	// 생성된 루트 HUD 인스턴스입니다. 컷신 등에서 이 하나만 숨기면 됩니다.
 	UPROPERTY()
 	UHUDRootWidget* HUDRoot;

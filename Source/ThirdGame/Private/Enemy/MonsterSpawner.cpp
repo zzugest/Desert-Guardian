@@ -30,6 +30,7 @@
 #include "Components/WidgetComponent.h"
 #include "EnemyHPBarWidget.h"
 #include "ObjectPoolSubsystem.h"
+#include "MinimapSubsystem.h"
 
 // 플레이어 접근 감지용 SphereComponent를 설정하고 불필요한 Tick을 비활성화합니다.
 AMonsterSpawner::AMonsterSpawner()
@@ -142,6 +143,16 @@ void AMonsterSpawner::OnSensorOverlapBegin(UPrimitiveComponent* OverlappedComp, 
         Monster->SetActorEnableCollision(true);
         Monster->SetActorTickEnabled(true);
         Monster->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+
+        // AEnemy::AllActiveEnemies.Add(Monster); // [비활성화] Overlap Sphere로 대체
+
+        if (UGameInstance* GI = GetGameInstance())
+        {
+            if (UMinimapSubsystem* MinimapSys = GI->GetSubsystem<UMinimapSubsystem>())
+            {
+                MinimapSys->RegisterMarker(Monster, EMinimapMarkerType::Enemy);
+            }
+        }
     }
 }
 
@@ -159,6 +170,16 @@ void AMonsterSpawner::OnSensorOverlapEnd(UPrimitiveComponent* OverlappedComp, AA
         Monster->SetActorHiddenInGame(true);
         Monster->SetActorEnableCollision(false);
         Monster->SetActorTickEnabled(false);
+
+        // AEnemy::AllActiveEnemies.Remove(Monster); // [비활성화] Overlap Sphere로 대체
+
+        if (UGameInstance* GI = GetGameInstance())
+        {
+            if (UMinimapSubsystem* MinimapSys = GI->GetSubsystem<UMinimapSubsystem>())
+            {
+                MinimapSys->UnregisterMarker(Monster);
+            }
+        }
 
         if (Monster->GetCharacterMovement())
         {
@@ -192,9 +213,18 @@ void AMonsterSpawner::HandleMonsterDeath(AEnemy* DeadMonster)
 {
     if (!DeadMonster) return;
 
-    // 죽은 몬스터를 풀에서 제거하고 델리게이트를 해제합니다.
+    // 죽은 몬스터를 풀·미니맵에서 제거하고 델리게이트를 해제합니다.
     MonsterPool.Remove(DeadMonster);
+    // AEnemy::AllActiveEnemies.Remove(DeadMonster); // [비활성화] Overlap Sphere로 대체
     DeadMonster->OnMonsterDied.RemoveDynamic(this, &AMonsterSpawner::HandleMonsterDeath);
+
+    if (UGameInstance* GI = GetGameInstance())
+    {
+        if (UMinimapSubsystem* MinimapSys = GI->GetSubsystem<UMinimapSubsystem>())
+        {
+            MinimapSys->UnregisterMarker(DeadMonster);
+        }
+    }
 
     FName RowNameToRespawn = DeadMonster->EnemyRowName;
 
@@ -264,6 +294,16 @@ void AMonsterSpawner::RespawnMonster(AEnemy* MonsterToRespawn)
         MonsterToRespawn->SetActorEnableCollision(true);
         MonsterToRespawn->SetActorTickEnabled(true);
         MonsterToRespawn->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+
+        // AEnemy::AllActiveEnemies.Add(MonsterToRespawn); // [비활성화] Overlap Sphere로 대체
+
+        if (UGameInstance* GI = GetGameInstance())
+        {
+            if (UMinimapSubsystem* MinimapSys = GI->GetSubsystem<UMinimapSubsystem>())
+            {
+                MinimapSys->RegisterMarker(MonsterToRespawn, EMinimapMarkerType::Enemy);
+            }
+        }
     }
     else
     {

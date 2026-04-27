@@ -14,7 +14,6 @@
 #include "MinimapWidget.generated.h"
 
 class UTextureRenderTarget2D;
-class ABaseNPC;
 
 UCLASS()
 class THIRDGAME_API UMinimapWidget : public UUserWidget
@@ -58,10 +57,9 @@ private:
 	UPROPERTY()
 	UTextureRenderTarget2D* CapturedRT = nullptr;
 
-	// NativePaint에서 매 프레임 GetAllActorsOfClass를 피하기 위해
-	// BeginPlay 시점에 한 번만 수집해 캐싱합니다.
+	// MinimapSubsystem 캐시 (NativePaint에서 매 프레임 GetSubsystem 호출 방지)
 	UPROPERTY()
-	TArray<AActor*> CachedNPCs;
+	class UMinimapSubsystem* MinimapSys = nullptr;
 
 	// 월드 좌표 → 미니맵 로컬 픽셀 좌표 변환
 	FVector2D WorldToMinimap(FVector ActorPos, FVector PlayerPos) const;

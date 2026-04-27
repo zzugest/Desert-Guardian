@@ -7,30 +7,30 @@
 // [렌더링 레이어 구조]
 // 레이어 1: SceneCapture RenderTarget → 지형 배경 이미지
 // 레이어 2: Dot 오버레이
-//   - 적(AEnemy)  → 빨간 점  (AllActiveEnemies 정적 목록 참조)
-//   - NPC         → 노란 점  (NativeConstruct에서 한 번만 수집한 캐시 참조)
+//   - 적(AEnemy)  → 빨간 점
+//   - NPC         → 노란 점
+//   - 포탈        → 파란 점
 //   - 플레이어    → 초록 점  (항상 미니맵 중앙에 고정)
 //
 // [성능 고려]
-// - NPC 목록은 NativeConstruct에서 한 번만 수집해 캐싱 (매 프레임 GetAllActorsOfClass 방지)
-// - 적 목록은 AEnemy가 스폰/사망 시 자체 등록하는 AllActiveEnemies 정적 배열 참조
+// - MinimapSubsystem이 관리하는 단일 목록을 참조해 적·NPC·포탈을 한 번에 순회합니다.
+// - MinimapSubsystem 포인터는 NativeConstruct에서 한 번만 캐싱합니다.
 // =========================================================================================
 
 #include "MinimapWidget.h"
 #include "Rendering/DrawElements.h"
-#include "Kismet/GameplayStatics.h"
 #include "Engine/TextureRenderTarget2D.h"
-#include "Enemy.h"
-#include "NPC/BaseNPC.h"
+#include "MinimapSubsystem.h"
 
-// 위젯 생성 시 NPC 목록을 한 번만 수집해 캐싱합니다.
+// MinimapSubsystem 포인터를 한 번만 캐싱합니다.
 void UMinimapWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
 
-	// NPC 목록은 게임 시작 후 변하지 않으므로 한 번만 수집합니다.
-	// NativePaint(매 프레임)에서 GetAllActorsOfClass를 호출하는 비용을 없앱니다.
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), ABaseNPC::StaticClass(), CachedNPCs);
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		MinimapSys = GI->GetSubsystem<UMinimapSubsystem>();
+	}
 }
 
 // MinimapComponent에서 캡처한 RenderTarget을 받아 배경 이미지로 사용하도록 설정합니다.
@@ -89,20 +89,25 @@ int32 UMinimapWidget::NativePaint(
 
 	// ── 레이어 2: Dot 오버레이 ──
 
-	// 적 — 빨간 점
-	for (const TWeakObjectPtr<AEnemy>& WeakEnemy : AEnemy::AllActiveEnemies)
+	// MinimapSubsystem의 단일 목록을 순회해 적·NPC·포탈을 한 번에 그립니다.
+	if (MinimapSys)
 	{
-		if (!WeakEnemy.IsValid()) continue;
-		DrawDot(OutDrawElements, AllottedGeometry, Layer, MinimapOrigin,
-			WorldToMinimap(WeakEnemy->GetActorLocation(), PlayerPos), 7.f, FLinearColor::Red);
-	}
+		for (const FMinimapMarker& Marker : MinimapSys->GetMarkers())
+		{
+			if (!IsValid(Marker.Actor)) continue;
 
-	// NPC — 노란 점
-	for (AActor* NPC : CachedNPCs)
-	{
-		if (!IsValid(NPC)) continue;
-		DrawDot(OutDrawElements, AllottedGeometry, Layer, MinimapOrigin,
-			WorldToMinimap(NPC->GetActorLocation(), PlayerPos), 7.f, FLinearColor::Yellow);
+			FLinearColor Color;
+			switch (Marker.Type)
+			{
+				case EMinimapMarkerType::Enemy:  Color = FLinearColor::Red;    break;
+				case EMinimapMarkerType::NPC:    Color = FLinearColor::Yellow; break;
+				case EMinimapMarkerType::Portal: Color = FLinearColor::Blue;   break;
+				default:                         Color = FLinearColor::White;  break;
+			}
+
+			DrawDot(OutDrawElements, AllottedGeometry, Layer, MinimapOrigin,
+				WorldToMinimap(Marker.Actor->GetActorLocation(), PlayerPos), 7.f, Color);
+		}
 	}
 
 	// 플레이어 — 초록 점 (항상 미니맵 중앙, 최상위 레이어)

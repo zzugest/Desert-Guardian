@@ -267,9 +267,8 @@ public:
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "State|Targeting")
 	bool bIsTargetable = true;
 
-	// 현재 씬에 활성화된 모든 적을 추적하는 전역 목록.
-	// TWeakObjectPtr 사용으로 GC에 의해 수거된 객체를 안전하게 처리합니다.
-	static TArray<TWeakObjectPtr<AEnemy>> AllActiveEnemies;
+	// [비활성화] 타겟팅 → Overlap Sphere / 미니맵 → MinimapSubsystem으로 대체되어 더 이상 사용하지 않습니다.
+	// static TArray<TWeakObjectPtr<AEnemy>> AllActiveEnemies;
 
 	// BeginPlay에서 한 번만 조회해 캐싱 — Tick마다 GetPlayerCameraManager() 호출 방지
 	UPROPERTY()

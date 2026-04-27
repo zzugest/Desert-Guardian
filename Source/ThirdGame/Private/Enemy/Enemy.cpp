@@ -34,9 +34,10 @@
 #include "NPC/Quest/QuestSubsystem.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "ObjectPoolSubsystem.h"
+#include "MinimapSubsystem.h"
 
-// 정적 멤버 초기화 — 타겟팅/미니맵 시스템이 공유하는 전역 적 목록입니다.
-TArray<TWeakObjectPtr<AEnemy>> AEnemy::AllActiveEnemies;
+// [비활성화] 타겟팅 → Overlap Sphere / 미니맵 → MinimapSubsystem으로 대체
+// TArray<TWeakObjectPtr<AEnemy>> AEnemy::AllActiveEnemies;
 
 // 캡슐·스켈레탈 메시·HP 바·AI 퍼셉션·내비게이션 인보커·타겟 마커의 기본값을 초기화합니다.
 AEnemy::AEnemy()
@@ -185,8 +186,20 @@ void AEnemy::BeginPlay()
 	HomeLocation = GetActorLocation();
 	GetWorld()->GetTimerManager().SetTimer(LeashTimerHandle, this, &AEnemy::CheckLeash, 0.5f, true);
 
-	// 타겟팅·미니맵 시스템이 참조하는 전역 목록에 자신을 등록합니다.
-	AllActiveEnemies.Add(this);
+	// 스포너가 없는 적(보스 등 직접 배치)만 여기서 미니맵에 등록합니다.
+	// 스포너가 있는 적은 OnSensorOverlapBegin에서 등록합니다.
+	if (!MySpawner)
+	{
+		// AllActiveEnemies.Add(this); // [비활성화] Overlap Sphere로 대체
+
+		if (UGameInstance* GI = GetGameInstance())
+		{
+			if (UMinimapSubsystem* MinimapSys = GI->GetSubsystem<UMinimapSubsystem>())
+			{
+				MinimapSys->RegisterMarker(this, EMinimapMarkerType::Enemy);
+			}
+		}
+	}
 
 	// HP 바 빌보딩에 필요한 카메라 매니저를 한 번만 조회해 캐싱합니다.
 	CachedCameraManager = UGameplayStatics::GetPlayerCameraManager(GetWorld(), 0);
@@ -205,8 +218,19 @@ void AEnemy::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		AIPerceptionComp->OnTargetPerceptionUpdated.RemoveDynamic(this, &AEnemy::OnTargetDetected);
 	}
 
-	// Die() 전에 EndPlay가 먼저 호출된 경우를 대비해 전역 목록에서 제거합니다.
-	AllActiveEnemies.Remove(this);
+	// 스포너가 없는 적(보스 등 직접 배치)만 여기서 미니맵에서 제거합니다.
+	if (!MySpawner)
+	{
+		// AllActiveEnemies.Remove(this); // [비활성화] Overlap Sphere로 대체
+
+		if (UGameInstance* GI = GetGameInstance())
+		{
+			if (UMinimapSubsystem* MinimapSys = GI->GetSubsystem<UMinimapSubsystem>())
+			{
+				MinimapSys->UnregisterMarker(this);
+			}
+		}
+	}
 
 	Super::EndPlay(EndPlayReason);
 }
@@ -342,8 +366,20 @@ void AEnemy::Die()
 		}
 	}
 
-	// 풀로 반환되기 전에 전역 목록에서 자신을 제거합니다.
-	AllActiveEnemies.Remove(this);
+	// 스포너가 없는 적(보스 등 직접 배치)만 여기서 미니맵에서 제거합니다.
+	// 스포너가 있는 적은 HandleMonsterDeath에서 제거합니다.
+	if (!MySpawner)
+	{
+		// AllActiveEnemies.Remove(this); // [비활성화] Overlap Sphere로 대체
+
+		if (UGameInstance* GI = GetGameInstance())
+		{
+			if (UMinimapSubsystem* MinimapSys = GI->GetSubsystem<UMinimapSubsystem>())
+			{
+				MinimapSys->UnregisterMarker(this);
+			}
+		}
+	}
 
 	UObjectPoolSubsystem* PoolSubsystem = GetWorld()->GetSubsystem<UObjectPoolSubsystem>();
 	if (PoolSubsystem)
@@ -404,9 +440,21 @@ void AEnemy::Revive()
 
 	GetWorld()->GetTimerManager().SetTimer(LeashTimerHandle, this, &AEnemy::CheckLeash, 0.5f, true);
 
-	// GC로 수거된 무효 항목을 정리한 뒤 전역 목록에 다시 등록합니다.
-	AllActiveEnemies.RemoveAll([](const TWeakObjectPtr<AEnemy>& W) { return !W.IsValid(); });
-	AllActiveEnemies.Add(this);
+	// 스포너가 없는 적(보스 등 직접 배치)만 여기서 미니맵에 다시 등록합니다.
+	// 스포너가 있는 적은 RespawnMonster에서 등록합니다.
+	if (!MySpawner)
+	{
+		// AllActiveEnemies.RemoveAll([](const TWeakObjectPtr<AEnemy>& W) { return !W.IsValid(); }); // [비활성화]
+		// AllActiveEnemies.Add(this); // [비활성화] Overlap Sphere로 대체
+
+		if (UGameInstance* GI = GetGameInstance())
+		{
+			if (UMinimapSubsystem* MinimapSys = GI->GetSubsystem<UMinimapSubsystem>())
+			{
+				MinimapSys->RegisterMarker(this, EMinimapMarkerType::Enemy);
+			}
+		}
+	}
 }
 
 // 0.5초마다 스폰 위치(HomeLocation)와의 거리를 확인해 리시 범위 초과 시 귀환을 시작합니다.
