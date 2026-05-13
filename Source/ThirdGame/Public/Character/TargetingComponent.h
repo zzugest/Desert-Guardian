@@ -1,8 +1,9 @@
 // =========================================================================================
 // TargetingComponent.h
 //
-// [���� ���]
-// ī�޶� ������ �������� ȭ�� �߾ӿ� ���� ������ �þ߰� Ȯ���� ���� �ڵ����� �ĺ��Ͽ� ǥ������ �����ϴ� �ڵ� Ÿ���� ������Ʈ ����Դϴ�.
+// [파일 역할]
+// 카메라 전방으로 구체를 스윕하여 화면 중앙에 가장 가까운 적을 자동으로 탐색하고
+// 타겟 마커를 표시하는 자동 타겟팅 컴포넌트입니다.
 // =========================================================================================
 
 #pragma once
@@ -19,10 +20,10 @@ class THIRDGAME_API UTargetingComponent : public UActorComponent
 public:
     UTargetingComponent();
 
-    // �� ������ Ÿ�� ��ĵ ������ �ݺ� �����մϴ�.
+    // 0.1초 간격으로 타겟 스캔을 반복 수행합니다.
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
-    // ���� �ý��ۿ� ���� �ֿ켱 ���� ���� ������� ������ ���� ��ü�Դϴ�.
+    // 현재 시스템에 의해 선택된 최우선 타겟 액터입니다.
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Targeting")
     AActor* CurrentTarget;
 
@@ -39,6 +40,6 @@ public:
     bool bShowDebug = false;
 
 private:
-    // ī�޶� ���氢(����)�� ���ü�(���� Ʈ���̽�)�� �˻��Ͽ� ȭ�� �߾ӿ� ���� ������ ���� �����س��ϴ�.
+    // 카메라 전방(구체 스윕)과 시야 차단(벽 트레이스)을 검사하여 화면 중앙에 가장 가까운 적을 찾아 설정합니다.
     void FindTarget();
 };
