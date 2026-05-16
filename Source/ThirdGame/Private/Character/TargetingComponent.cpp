@@ -88,7 +88,7 @@ void UTargetingComponent::FindTarget()
 
         // 카메라 전방 기준 30도(cos 0.866) 이내의 적만 허용합니다.
         FVector DirectionToEnemy = (Enemy->GetActorLocation() - CameraLocation).GetSafeNormal();
-        if (FVector::DotProduct(CameraForward, DirectionToEnemy) < 0.707f) continue;
+        if (FVector::DotProduct(CameraForward, DirectionToEnemy) < 0.866f) continue;
 
         // 카메라~적 사이 벽 차단 여부를 LineTrace로 확인합니다.
         FHitResult WallHit;
@@ -111,19 +111,19 @@ void UTargetingComponent::FindTarget()
         }
     }
 
- #if ENABLE_DRAW_DEBUG
-     if (bShowDebug)
-     {
-         FVector EndPoint = CameraLocation + CameraForward * TraceDistance;
-         DrawDebugLine(GetWorld(), CameraLocation, EndPoint, FColor::Yellow, false, 0.15f, 0, 2.0f);
-         DrawDebugCone(GetWorld(), CameraLocation, CameraForward, TraceDistance,
-             FMath::DegreesToRadians(30.0f), FMath::DegreesToRadians(30.0f),
-             16, FColor::Green, false, 0.15f);
-         DrawDebugSphere(GetWorld(), EndPoint, SweepRadius, 16, FColor::Yellow, false, 0.15f);
-         if (BestTarget)
-             DrawDebugSphere(GetWorld(), BestTarget->GetActorLocation(), 80.0f, 12, FColor::Red, false, 0.15f);
-     }
- #endif
+ //#if ENABLE_DRAW_DEBUG
+ //    if (bShowDebug)
+ //    {
+ //        FVector EndPoint = CameraLocation + CameraForward * TraceDistance;
+ //        DrawDebugLine(GetWorld(), CameraLocation, EndPoint, FColor::Yellow, false, 0.15f, 0, 2.0f);
+ //        DrawDebugCone(GetWorld(), CameraLocation, CameraForward, TraceDistance,
+ //            FMath::DegreesToRadians(30.0f), FMath::DegreesToRadians(30.0f),
+ //            16, FColor::Green, false, 0.15f);
+ //        DrawDebugSphere(GetWorld(), EndPoint, SweepRadius, 16, FColor::Yellow, false, 0.15f);
+ //        if (BestTarget)
+ //            DrawDebugSphere(GetWorld(), BestTarget->GetActorLocation(), 80.0f, 12, FColor::Red, false, 0.15f);
+ //    }
+ //#endif
 
     // 타겟이 변경된 경우에만 마커(시각 피드백)를 갱신합니다.
     if (CurrentTarget != BestTarget)
