@@ -13,12 +13,12 @@ class THIRDGAME_API UGlobalUIData : public UDataAsset
     GENERATED_BODY()
 
 public:
-    // Àü¿ªÀ¸·Î ¾²ÀÏ °ñµå ¾ÆÀÌÄÜ
+    // ì „ì—­ìœ¼ë¡œ ì“°ì¼ ê³¨ë“œ ì•„ì´ì½˜
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Resources|Image")
     UTexture2D* GoldIcon;
 
    
-    // ¼­ºê½Ã½ºÅÛÀÌ È­¸é¿¡ ¶ç¿ï °æ°íÃ¢ À§Á¬ÀÇ ¼³°èµµ(Å¬·¡½º)ÀÔ´Ï´Ù.
+    // ì„œë¸Œì‹œìŠ¤í…œì´ í™”ë©´ì— ë„ìš¸ ê²½ê³ ì°½ ìœ„ì ¯ì˜ ì„¤ê³„ë„(í´ë˜ìŠ¤)ì…ë‹ˆë‹¤.
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Resources|UI")
     TSubclassOf<class UWarningWidget> WarningWidgetClass;
     

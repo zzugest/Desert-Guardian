@@ -12,7 +12,7 @@ class THIRDGAME_API UEnemyHPBarWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
-	// Ã¼·Â¹Ù¸¦ °»½ÅÇÏ´Â ÇÔ¼ö
+	// ì²´ë ¥ë°”ë¥¼ ê°±ì‹ í•˜ëŠ” í•¨ìˆ˜
 	void UpdateHPWidget(float CurrentHP, float MaxHP);
 
 	UPROPERTY(meta = (BindWidget))

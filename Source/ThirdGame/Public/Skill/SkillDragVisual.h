@@ -4,7 +4,7 @@
 #include "Blueprint/UserWidget.h"
 #include "SkillDragVisual.generated.h"
 
-class UImage; // Àü¹æ ¼±¾ğ
+class UImage; // ì „ë°© ì„ ì–¸
 
 UCLASS()
 class THIRDGAME_API USkillDragVisual : public UUserWidget
@@ -12,11 +12,11 @@ class THIRDGAME_API USkillDragVisual : public UUserWidget
     GENERATED_BODY()
 
 public:
-	// ¿ÜºÎ¿¡¼­ ¾ÆÀÌÄÜÀ» º¸¿©ÁÖ´Â ÇÔ¼ö: ½ºÅ³ µå·¡±× ½ÃÀÛ ½Ã È£ÃâµÇ¾î ¾ÆÀÌÄÜÀ» ¼³Á¤
+	// ì™¸ë¶€ì—ì„œ ì•„ì´ì½˜ì„ ë³´ì—¬ì£¼ëŠ” í•¨ìˆ˜: ìŠ¤í‚¬ ë“œë˜ê·¸ ì‹œì‘ ì‹œ í˜¸ì¶œë˜ì–´ ì•„ì´ì½˜ì„ ì„¤ì •
     void SetDragIcon(UTexture2D* IconTexture);
 
 protected:
-    // À§Á¬ µğÀÚÀÌ³Ê¿¡ ÀÖ´Â ÀÌ¹ÌÁö¿Í ¿¬°á
+    // ìœ„ì ¯ ë””ìì´ë„ˆì— ìˆëŠ” ì´ë¯¸ì§€ì™€ ì—°ê²°
     UPROPERTY(meta = (BindWidget))
     UImage* DragIconImage;
 };

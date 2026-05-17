@@ -4,7 +4,7 @@
 #include "Blueprint/UserWidget.h"
 #include "BuffIconWidget.generated.h"
 
-// Àü¹æ ¼±¾ğ 
+// ì „ë°© ì„ ì–¸ 
 class UImage;
 class UProgressBar;
 class UTextBlock;
@@ -19,13 +19,13 @@ public:
 	
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
-	// ¿ÜºÎ(¹öÇÁ ¸ñ·Ï À§Á¬)¿¡¼­ ÀÌ ¹öÇÁÀÇ Á¤º¸¸¦ ¼¼ÆÃÇØ ÁÙ ÇÔ¼ö
+	// ì™¸ë¶€(ë²„í”„ ëª©ë¡ ìœ„ì ¯)ì—ì„œ ì´ ë²„í”„ì˜ ì •ë³´ë¥¼ ì„¸íŒ…í•´ ì¤„ í•¨ìˆ˜
 	UFUNCTION(BlueprintCallable, Category = "Buff")
 	void InitBuff(UTexture2D* InIcon, float InMaxDuration, float InRemainingTime);
 
 protected:
 	// ==========================================
-	// UI ¹ÙÀÎµù
+	// UI ë°”ì¸ë”©
 	// ==========================================
 	UPROPERTY(meta = (BindWidget))
 	UImage* BuffIconImage;
@@ -38,7 +38,7 @@ protected:
 	
 
 private:
-	// ³»ºÎÀûÀ¸·Î ±â¾ïÇÒ µ¥ÀÌÅÍ
+	// ë‚´ë¶€ì ìœ¼ë¡œ ê¸°ì–µí•  ë°ì´í„°
 	FName BuffID;
 	float MaxDuration;
 	float RemainingTime;

@@ -1,5 +1,5 @@
 #include "AnimNotify/AnimNotifyState_WeaponTrace.h"
-#include "Character/MyCharacter.h" // 경로 맞춰주세요!
+#include "Character/MyCharacter.h" 
 #include "Character/CombatComponent.h"
 
 void UAnimNotifyState_WeaponTrace::NotifyBegin(USkeletalMeshComponent* MeshComp, UAnimSequenceBase* Animation, float TotalDuration, const FAnimNotifyEventReference& EventReference)
