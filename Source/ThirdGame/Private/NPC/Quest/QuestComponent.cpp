@@ -13,7 +13,9 @@
 #include "NPC/Quest/QuestSubsystem.h"
 #include "MoneySubsystem.h"
 #include "Inventory/InventorySubsystem.h"
+#include "Inventory/InventoryComponent.h"
 #include "Item/ItemData.h"
+#include "MyCharacter.h"
 
 UQuestComponent::UQuestComponent()
 {
@@ -221,20 +223,20 @@ void UQuestComponent::CompleteQuest(FName QuestID)
             }
         }
 
-        // 아이템 보상 지급: ItemDataTable에서 행을 찾아 InventorySubsystem에 추가합니다.
+        // 아이템 보상 지급: 서버 RPC를 통해 서버 권위 인벤토리에 추가합니다.
         if (ItemDataTable)
         {
-            UInventorySubsystem* InvSub = GetWorld()->GetGameInstance()->GetSubsystem<UInventorySubsystem>();
-            if (InvSub)
+            AMyCharacter* MyChar = Cast<AMyCharacter>(GetOwner());
+            if (MyChar && MyChar->InventoryComp)
             {
                 for (const FQuestItemReward& RewardNode : QuestData->RewardItems)
                 {
                     FItemData* FoundItem = ItemDataTable->FindRow<FItemData>(RewardNode.ItemRowName, TEXT("QuestRewardLookup"));
                     if (FoundItem)
                     {
-                        FItemData ItemToGive     = *FoundItem;
-                        ItemToGive.Quantity      = RewardNode.Quantity;
-                        InvSub->AddItem(ItemToGive);
+                        FItemData ItemToGive = *FoundItem;
+                        ItemToGive.Quantity  = RewardNode.Quantity;
+                        MyChar->ServerClaimQuestReward(ItemToGive);
                     }
                 }
             }

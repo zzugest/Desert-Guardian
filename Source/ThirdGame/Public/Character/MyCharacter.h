@@ -103,6 +103,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Component")
 	UCombatComponent* CombatComp;
 
+	// 서버 권위 인벤토리 데이터를 관리하는 컴포넌트입니다.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Component")
+	UInventoryComponent* InventoryComp;
+
 	// =============================================================
 	// [�Է�] ���� �׼� (Enhanced Input)
 	// =============================================================
@@ -191,6 +195,10 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerStopSprint();
 
+	// 서버 → 모든 클라이언트: SP 소진 등으로 서버가 달리기를 강제 중단할 때 사용합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastForceStopSprint();
+
 	// 클라이언트 → 서버: 구르기 요청. 방향 섹션 이름을 파라미터로 전달합니다.
 	UFUNCTION(Server, Reliable)
 	void ServerRequestRoll(FName SectionName);
@@ -203,6 +211,18 @@ public:
 	// 공중 공격 시 서버의 SimulatedProxy 위치 오차로 트레이스가 빗나가는 경우를 보정합니다.
 	UFUNCTION(Server, Unreliable)
 	void ServerReportWeaponHit(FVector HitLocation, FRotator HitNormal);
+
+	// 클라이언트 → 서버: 아이템 줍기 요청. 서버에서 유효성 검증 후 인벤토리에 추가하고 액터를 제거합니다.
+	UFUNCTION(Server, Reliable)
+	void ServerPickItem(class APickableItem* Item);
+
+	// 클라이언트 → 서버: 상점 아이템 구매 요청. 서버에서 인벤토리에 추가합니다.
+	UFUNCTION(Server, Reliable)
+	void ServerBuyItem(FItemData Item);
+
+	// 클라이언트 → 서버: 퀘스트 보상 아이템 지급 요청. 서버에서 인벤토리에 추가합니다.
+	UFUNCTION(Server, Reliable)
+	void ServerClaimQuestReward(FItemData Item);
 
 	// �Է� �̺�Ʈ�� �����Ͽ� ������ ��ȣ�ۿ��� �����մϴ�.
 	void Interact(const FInputActionValue& Value);
@@ -366,6 +386,15 @@ public:
 
 	// ���� �ڼ��� ������ ���� �ð� ������Ű�� ���� Ÿ�̸� ��ü�Դϴ�.
 	FTimerHandle CombatTimerHandle;
+
+	// 전투 자세 여부를 모든 클라이언트에 복제합니다.
+	// 다른 플레이어 화면에서 스트레이프(옆 이동) 애니메이션이 올바르게 재생되도록 합니다.
+	UPROPERTY(ReplicatedUsing = OnRep_CombatStance, BlueprintReadOnly, Category = "Combat")
+	bool bIsInCombatStance = false;
+
+	// bIsInCombatStance 복제 수신 시 자동 호출 — 이동 방향 설정을 로컬에 적용합니다.
+	UFUNCTION()
+	void OnRep_CombatStance();
 
 	// 가장 최근 공격 요청 시 계산한 스냅 방향 — 콤보 이어치기 Multicast에 재사용합니다.
 	FRotator LastSnapRotation = FRotator::ZeroRotator;

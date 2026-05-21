@@ -99,7 +99,7 @@ public:
     float MaxHP = 100.0f;
 
     // ���� ü��
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Status")
+    UPROPERTY(ReplicatedUsing=OnRep_Stats, EditAnywhere, BlueprintReadWrite, Category = "Status")
     float CurrentHP = 100.0f;
 
     // �ִ� ����
@@ -107,7 +107,7 @@ public:
     float MaxMP = 100.0f;
 
     // ���� ����
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Status")
+    UPROPERTY(ReplicatedUsing=OnRep_Stats, EditAnywhere, BlueprintReadWrite, Category = "Status")
     float CurrentMP = 100.0f;
 
     // �ʴ� ���� �ڿ� ȸ�� �ӵ�
@@ -227,13 +227,20 @@ public:
     float MaxSP;
 
     // ���� ���¹̳�
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Stats")
+    UPROPERTY(ReplicatedUsing=OnRep_Stats, EditAnywhere, BlueprintReadWrite, Category = "Stats")
     float CurrentSP;
 
     // Ÿ���� ���� �� ��ǥ�� ���� ��ġ�� ���� ��������� ȸ���ϴ� ���� ��ġ
     UPROPERTY(EditAnywhere, Category = "Combat")
     float AttackTrackingSpeed = 8.0f;
 
+
+    // 복제할 변수를 등록합니다.
+    virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+    // CurrentHP/MP/SP 복제 수신 시 자동 호출 — 소유 클라이언트의 HUD를 갱신합니다.
+    UFUNCTION()
+    void OnRep_Stats();
 
     // ���� ���� �Է��� ó���ϴ� �Լ�
     UFUNCTION(BlueprintCallable, Category = "Combat|Magic")

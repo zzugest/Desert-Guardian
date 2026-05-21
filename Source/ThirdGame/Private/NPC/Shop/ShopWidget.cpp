@@ -16,6 +16,8 @@
 #include "NPC/Shop/PurchaseSlotWidget.h"
 #include "MoneyComponent.h"
 #include "Inventory/InventorySubsystem.h"
+#include "Inventory/InventoryComponent.h"
+#include "MyCharacter.h"
 #include "GameFramework/Character.h"
 #include "Kismet/GameplayStatics.h"
 #include "UISubsystem.h"
@@ -204,12 +206,16 @@ void UShopWidget::OnClickFinalBuy()
         return;
     }
 
-    // 각 아이템을 수량만큼 반복 AddItem해 인벤토리에 넣습니다.
-    for (const FCartItem& Item : CartItems)
+    // 각 아이템을 수량만큼 서버 RPC를 통해 서버 권위 인벤토리에 추가합니다.
+    AMyCharacter* MyChar = Cast<AMyCharacter>(UGameplayStatics::GetPlayerPawn(this, 0));
+    if (MyChar && MyChar->InventoryComp)
     {
-        for (int32 i = 0; i < Item.Quantity; i++)
+        for (const FCartItem& Item : CartItems)
         {
-            InvenSys->AddItem(Item.Data);
+            for (int32 i = 0; i < Item.Quantity; i++)
+            {
+                MyChar->ServerBuyItem(Item.Data);
+            }
         }
     }
 

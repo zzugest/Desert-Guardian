@@ -34,6 +34,7 @@
 #include "MinimapWidget.h"
 #include "Character/HUDRootWidget.h"
 #include "InventoryComponent.h"
+#include "Item/PickableItem.h"
 #include "QuickSlotComponent.h"
 #include "CombatComponent.h"
 #include "PickableItem.h"
@@ -58,6 +59,14 @@
 #include "Engine/DamageEvents.h"
 #include "MapPortal.h"
 #include "Blueprint/UserWidget.h"
+#include "Net/UnrealNetwork.h"
+
+// 복제할 변수를 등록합니다.
+void AMyCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+    Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+    DOREPLIFETIME(AMyCharacter, bIsInCombatStance);
+}
 
 // 캐릭터의 이동, 카메라, 전투/인벤토리 등 모든 컴포넌트를 생성하고 기본값을 설정합니다.
 AMyCharacter::AMyCharacter()
@@ -101,6 +110,7 @@ AMyCharacter::AMyCharacter()
     SkillComp     = CreateDefaultSubobject<USkillComponent>(TEXT("SkillComp"));
     TargetingComp = CreateDefaultSubobject<UTargetingComponent>(TEXT("TargetingComponent"));
     MinimapComp   = CreateDefaultSubobject<UMinimapComponent>(TEXT("MinimapComp"));
+    InventoryComp = CreateDefaultSubobject<UInventoryComponent>(TEXT("InventoryComp"));
 }
 
 // 게임 시작 시 입력 매핑, HUDRoot(통합 HUD) 생성, 인벤토리 위젯 및 서브시스템 이벤트 연결을 수행합니다.
@@ -214,44 +224,45 @@ void AMyCharacter::Tick(float DeltaTime)
 
     if (!CombatComp) return;
 
-    // 달리기 중 스태미나 소모 처리
-    if (bIsSprinting)
+    // SP 소모/회복은 서버에서만 처리합니다. 변경된 값은 OnRep_Stats를 통해 클라이언트 HUD에 자동 반영됩니다.
+    if (HasAuthority())
     {
-        // 공중이거나 공격 중일 때는 달리기 강제 종료
-        if (HasStateTag("State.Movement.InAir") || HasStateTag("State.Action.Attacking"))
+        if (bIsSprinting)
         {
-            StopSprint();
+            // 공중이거나 공격 중일 때는 달리기 강제 종료
+            if (HasStateTag("State.Movement.InAir") || HasStateTag("State.Action.Attacking"))
+            {
+                MulticastForceStopSprint();
+            }
+            else
+            {
+                float SprintCost = 15.0f;
+                CombatComp->CurrentSP -= (SprintCost * DeltaTime);
+
+                if (CombatComp->CurrentSP <= 0.0f)
+                {
+                    CombatComp->CurrentSP = 0.0f;
+                    // SP 소진 시 모든 클라이언트에 달리기 중단을 알립니다.
+                    MulticastForceStopSprint();
+                }
+            }
         }
+        // 달리기 미사용 시 스태미나 자동 회복
         else
         {
-            float SprintCost = 15.0f;
-            CombatComp->CurrentSP -= (SprintCost * DeltaTime);
-
-            if (CombatComp->CurrentSP <= 0.0f)
+            if (!HasStateTag("State.Action.Rolling") && CombatComp->CurrentSP < CombatComp->MaxSP)
             {
-                CombatComp->CurrentSP = 0.0f;
-                StopSprint();
-            }
-        }
-    }
-    // 달리기 미사용 시 스태미나 자동 회복
-    else
-    {
-        if (!HasStateTag("State.Action.Rolling") && CombatComp->CurrentSP < CombatComp->MaxSP)
-        {
-            float RegenRate = 10.0f;
-            CombatComp->CurrentSP += (RegenRate * DeltaTime);
-            if (CombatComp->CurrentSP > CombatComp->MaxSP)
-            {
-                CombatComp->CurrentSP = CombatComp->MaxSP;
+                float RegenRate = 10.0f;
+                CombatComp->CurrentSP += (RegenRate * DeltaTime);
+                if (CombatComp->CurrentSP > CombatComp->MaxSP)
+                {
+                    CombatComp->CurrentSP = CombatComp->MaxSP;
+                }
             }
         }
     }
 
-    if (PlayerHUD)
-    {
-        PlayerHUD->UpdateState(CombatComp->CurrentHP, CombatComp->MaxHP, CombatComp->CurrentMP, CombatComp->MaxMP, CombatComp->CurrentSP, CombatComp->MaxSP);
-    }
+    // HUD 갱신은 OnRep_Stats가 담당합니다. (Tick에서 매 프레임 호출 불필요)
 }
 
 // Enhanced Input 액션과 각 기능별 함수를 바인딩합니다.
@@ -746,20 +757,11 @@ float AMyCharacter::TakeDamage(float DamageAmount, struct FDamageEvent const& Da
         return 0.0f;
     }
 
-    // 실제 피해 적용 및 HUD 갱신
+    // 실제 피해 적용 — CurrentHP가 Replicated이므로 OnRep_Stats가 클라이언트 HUD를 자동 갱신합니다.
     if (ActualDamage > 0.0f && CombatComp != nullptr)
     {
         EnterCombatStance();
         CombatComp->ReceiveDamage(ActualDamage);
-
-        if (PlayerHUD != nullptr)
-        {
-            PlayerHUD->UpdateState(
-                CombatComp->CurrentHP, CombatComp->MaxHP,
-                CombatComp->CurrentMP, CombatComp->MaxMP,
-                CombatComp->CurrentSP, CombatComp->MaxSP
-            );
-        }
     }
 
     return ActualDamage;
@@ -836,6 +838,13 @@ void AMyCharacter::StopSprint()
     ServerStopSprint();
 }
 
+// 모든 클라이언트에서 실행: SP 소진 등으로 서버가 달리기를 강제 중단할 때 bIsSprinting과 이동 속도를 동기화합니다.
+void AMyCharacter::MulticastForceStopSprint_Implementation()
+{
+    bIsSprinting = false;
+    GetCharacterMovement()->MaxWalkSpeed = 500.0f;
+}
+
 // 서버에서 실행: MaxWalkSpeed를 달리기 속도로 변경합니다.
 void AMyCharacter::ServerStartSprint_Implementation()
 {
@@ -863,6 +872,12 @@ void AMyCharacter::EnterCombatStance()
         GetCharacterMovement()->bOrientRotationToMovement = false;
         bUseControllerRotationYaw = true;
     }
+
+    // 서버에서만 복제 변수를 설정합니다. 변경 시 OnRep_CombatStance()가 모든 클라이언트에서 자동 호출됩니다.
+    if (HasAuthority() && !bIsInCombatStance)
+    {
+        bIsInCombatStance = true;
+    }
 }
 
 // 전투 타이머 만료 후 전투 자세를 해제하고 이동 방향 자동 회전을 복구합니다.
@@ -874,6 +889,32 @@ void AMyCharacter::ExitCombatStance()
     {
         GetCharacterMovement()->bOrientRotationToMovement = true;
         bUseControllerRotationYaw = false;
+    }
+
+    // 서버에서만 복제 변수를 해제합니다.
+    if (HasAuthority())
+    {
+        bIsInCombatStance = false;
+    }
+}
+
+// bIsInCombatStance 복제 수신 시 호출 — 이동 방향 플래그와 상태 태그를 로컬에 모두 적용합니다.
+// AnimBP가 bOrientRotationToMovement, State.Stance.Combat 태그, bIsInCombatStance 중 어느 것을 읽더라도 올바르게 동작합니다.
+void AMyCharacter::OnRep_CombatStance()
+{
+    if (GetCharacterMovement())
+    {
+        GetCharacterMovement()->bOrientRotationToMovement = !bIsInCombatStance;
+        bUseControllerRotationYaw = bIsInCombatStance;
+    }
+
+    if (bIsInCombatStance)
+    {
+        AddStateTag("State.Stance.Combat");
+    }
+    else
+    {
+        RemoveStateTag("State.Stance.Combat");
     }
 }
 
@@ -967,6 +1008,9 @@ void AMyCharacter::ServerRequestMagicAttack_Implementation(AActor* TargetActor)
         TargetingComp->CurrentTarget = TargetActor;
     }
 
+    // 마법 시전 시 전투 자세로 전환합니다. bIsInCombatStance가 복제되어 다른 클라이언트에 스트레이프 애니메이션을 활성화합니다.
+    EnterCombatStance();
+
     // 마법 시전 시작 전 상태를 기록해 실제로 새 마법이 시작됐는지 판단합니다.
     bool bWasCasting = HasStateTag("State.Action.MagicCasting");
 
@@ -990,4 +1034,34 @@ void AMyCharacter::MulticastPlayMagicMontage_Implementation(int32 ComboIndex, FV
     if (HasAuthority()) return;
     if (!CombatComp) return;
     CombatComp->PlayMagicMontageOnly(ComboIndex, TargetLocation);
+}
+
+// 서버에서 실행: 아이템 줍기 요청을 검증하고 인벤토리에 추가한 뒤 액터를 제거합니다.
+void AMyCharacter::ServerPickItem_Implementation(APickableItem* Item)
+{
+    if (!InventoryComp || !IsValid(Item)) return;
+
+    // 아이템 데이터가 유효한지 확인합니다.
+    if (Item->RuntimeItemData.Quantity <= 0 || Item->RuntimeItemData.ItemIcon == nullptr) return;
+
+    // 인벤토리에 추가를 시도합니다. 실패(인벤토리 가득 참)하면 아이템을 유지합니다.
+    bool bSuccess = InventoryComp->AddItemInternal(Item->RuntimeItemData);
+    if (!bSuccess) return;
+
+    // 획득 성공 시 월드에서 아이템 액터를 제거합니다.
+    Item->Destroy();
+}
+
+// 서버에서 실행: 상점 구매 아이템을 인벤토리에 추가합니다.
+void AMyCharacter::ServerBuyItem_Implementation(FItemData Item)
+{
+    if (!InventoryComp) return;
+    InventoryComp->AddItemInternal(Item);
+}
+
+// 서버에서 실행: 퀘스트 보상 아이템을 인벤토리에 추가합니다.
+void AMyCharacter::ServerClaimQuestReward_Implementation(FItemData Item)
+{
+    if (!InventoryComp) return;
+    InventoryComp->AddItemInternal(Item);
 }

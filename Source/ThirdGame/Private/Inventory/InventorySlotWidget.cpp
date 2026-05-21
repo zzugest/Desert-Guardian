@@ -16,6 +16,8 @@
 #include "Components/TextBlock.h"
 #include "Inventory/InventoryDragVisual.h"
 #include "Inventory/InventorySubsystem.h"
+#include "Inventory/InventoryComponent.h"
+#include "MyCharacter.h"
 #include "Kismet/GameplayStatics.h"
 #include "Item/ItemTooltipWidget.h"
 
@@ -131,11 +133,11 @@ bool UInventorySlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FDrag
 	UGameInstance* GI = GetGameInstance();
 	if (!GI) return false;
 
-	UInventorySubsystem* InvenSubsystem = GI->GetSubsystem<UInventorySubsystem>();
-	if (!InvenSubsystem) return false;
+	// 슬롯 교환은 서버 RPC를 통해 서버 권위 인벤토리에서 처리합니다.
+	AMyCharacter* MyChar = Cast<AMyCharacter>(UGameplayStatics::GetPlayerPawn(this, 0));
+	if (!MyChar || !MyChar->InventoryComp) return false;
 
-	// UI가 아닌 서브시스템에서 실제 데이터 배열을 교환하고 OnInventoryUpdated를 브로드캐스트합니다.
-	InvenSubsystem->SwapItems(PayloadObj->Index, MyItemObj->Index);
+	MyChar->InventoryComp->ServerSwapItems(PayloadObj->Index, MyItemObj->Index);
 
 	return true;
 }

@@ -12,8 +12,6 @@
 #include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "MyCharacter.h"
-#include "Inventory/InventorySubsystem.h"
-#include "Kismet/GameplayStatics.h"
 
 // 충돌 구체와 아이템 3D 메시를 생성하고 기본값을 설정합니다.
 APickableItem::APickableItem()
@@ -54,28 +52,16 @@ void APickableItem::BeginPlay()
     }
 }
 
-// 플레이어가 상호작용할 때 호출되어 InventorySubsystem에 아이템을 추가하고 액터를 제거합니다.
+// 플레이어가 상호작용할 때 호출되어 서버에 아이템 획득을 요청합니다.
+// 실제 인벤토리 추가 및 액터 제거는 서버(ServerPickItem)에서 처리합니다.
 void APickableItem::Interact(AActor* Interactor)
 {
-    UGameInstance* GI = Interactor ? Interactor->GetGameInstance() : nullptr;
-    if (!GI) return;
-
-    UInventorySubsystem* InvenSubsystem = GI->GetSubsystem<UInventorySubsystem>();
-    if (!InvenSubsystem) return;
-
     // DataTable 원본이 아닌 BeginPlay에서 초기화한 RuntimeItemData를 사용합니다.
-    if (RuntimeItemData.Quantity <= 0 || RuntimeItemData.ItemIcon == nullptr)
-    {
-        return;
-    }
+    if (RuntimeItemData.Quantity <= 0 || RuntimeItemData.ItemIcon == nullptr) return;
 
-    // 인벤토리에 아이템 추가를 시도합니다. 실패(인벤토리 가득 참)하면 액터를 유지합니다.
-    bool bAddSuccess = InvenSubsystem->AddItem(RuntimeItemData);
-    if (!bAddSuccess)
-    {
-        return;
-    }
+    AMyCharacter* MyChar = Cast<AMyCharacter>(Interactor);
+    if (!MyChar) return;
 
-    // 획득 성공 시 월드에서 아이템 액터를 제거합니다.
-    Destroy();
+    // 서버 RPC를 통해 서버에서 인벤토리 추가 및 액터 제거를 처리합니다.
+    MyChar->ServerPickItem(this);
 }

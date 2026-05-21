@@ -14,6 +14,7 @@
 
 #include "CombatComponent.h"
 
+#include "Net/UnrealNetwork.h"
 #include "MyCharacter.h"
 #include "MySword.h"
 #include "GameFramework/Character.h"
@@ -37,6 +38,26 @@
 UCombatComponent::UCombatComponent()
 {
     PrimaryComponentTick.bCanEverTick = true;
+    SetIsReplicated(true);
+}
+
+// 복제할 변수를 등록합니다.
+void UCombatComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+    Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+    DOREPLIFETIME(UCombatComponent, CurrentHP);
+    DOREPLIFETIME(UCombatComponent, CurrentMP);
+    DOREPLIFETIME(UCombatComponent, CurrentSP);
+}
+
+// CurrentHP/MP/SP 복제 수신 시 호출 — 소유 클라이언트의 HUD를 갱신합니다.
+void UCombatComponent::OnRep_Stats()
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (Owner && Owner->PlayerHUD)
+    {
+        Owner->PlayerHUD->UpdateState(CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP);
+    }
 }
 
 // 소유자를 AMyCharacter로 캐스트해 반환하는 내부 헬퍼 함수입니다.
@@ -169,15 +190,11 @@ void UCombatComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActo
 
     AMyCharacter* Owner = GetCharacterOwner();
 
-    if (CurrentMP < MaxMP)
+    // 마나 자동 회복은 서버에서만 처리합니다. 변경된 값은 OnRep_Stats를 통해 클라이언트 HUD에 자동 반영됩니다.
+    if (Owner && Owner->HasAuthority() && CurrentMP < MaxMP)
     {
         CurrentMP += (ManaRegenRate * DeltaTime);
         if (CurrentMP > MaxMP) CurrentMP = MaxMP;
-
-        if (Owner && Owner->PlayerHUD)
-        {
-            Owner->PlayerHUD->UpdateState(CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP);
-        }
     }
 
     if (CurrentCooldown_Q > 0.0f)
@@ -438,10 +455,7 @@ void UCombatComponent::SkillQ()
 
     UpdateStatToSubsystem();
 
-    if (Owner->PlayerHUD)
-    {
-        Owner->PlayerHUD->UpdateState(CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP);
-    }
+    // CurrentMP가 Replicated이므로 서버에서 변경하면 OnRep_Stats가 클라이언트 HUD를 자동 갱신합니다.
 
     UAnimInstance* AnimInstance = Owner->GetMesh()->GetAnimInstance();
     if (!AnimInstance) return;
@@ -458,11 +472,7 @@ void UCombatComponent::Heal(float Amount)
 {
     CurrentHP = FMath::Clamp(CurrentHP + Amount, 0.0f, MaxHP);
 
-    AMyCharacter* Owner = GetCharacterOwner();
-    if (Owner && Owner->PlayerHUD)
-    {
-        Owner->PlayerHUD->UpdateState(CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP);
-    }
+    // CurrentHP가 Replicated이므로 서버에서 변경하면 OnRep_Stats가 클라이언트 HUD를 자동 갱신합니다.
 
     UpdateStatToSubsystem();
 }
@@ -472,11 +482,7 @@ void UCombatComponent::RestoreMana(float Amount)
 {
     CurrentMP = FMath::Clamp(CurrentMP + Amount, 0.0f, MaxMP);
 
-    AMyCharacter* Owner = GetCharacterOwner();
-    if (Owner && Owner->PlayerHUD)
-    {
-        Owner->PlayerHUD->UpdateState(CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP);
-    }
+    // CurrentMP가 Replicated이므로 서버에서 변경하면 OnRep_Stats가 클라이언트 HUD를 자동 갱신합니다.
 
     UpdateStatToSubsystem();
 }
@@ -643,10 +649,7 @@ void UCombatComponent::RightClickMagicAttack()
     CurrentMP -= MagicCost;
     UpdateStatToSubsystem();
 
-    if (Owner->PlayerHUD)
-    {
-        Owner->PlayerHUD->UpdateState(CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP);
-    }
+    // CurrentMP가 Replicated이므로 서버에서 변경하면 OnRep_Stats가 클라이언트 HUD를 자동 갱신합니다.
 
     CurrentMagicCombo = FMath::Clamp(CurrentMagicCombo + 1, 1, MaxMagicCombo);
     GetWorld()->GetTimerManager().ClearTimer(MagicComboTimerHandle);

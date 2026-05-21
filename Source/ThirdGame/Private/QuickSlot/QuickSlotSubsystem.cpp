@@ -13,6 +13,7 @@
 
 #include "QuickSlot/QuickSlotSubsystem.h"
 #include "Inventory/InventorySubsystem.h"
+#include "Inventory/InventoryComponent.h"
 #include "Item/ItemEffectBase.h"
 #include "MyCharacter.h"
 #include "Kismet/GameplayStatics.h"
@@ -63,8 +64,7 @@ void UQuickSlotSubsystem::RegisterQuickSlot(int32 SlotIndex, const FItemData& In
 }
 
 // 지정 슬롯의 아이템을 사용합니다.
-// 쿨다운 남아있으면 경고 메시지 표시, 사용 조건 미충족 시 실패 메시지 표시,
-// 통과 시 효과 적용 → 쿨다운 등록 → 수량 감소 → UI 갱신 순서로 처리합니다.
+// 쿨다운·사용 조건은 클라이언트에서 선검사하고, 실제 수량 감소와 효과 적용은 서버 RPC로 처리합니다.
 void UQuickSlotSubsystem::UseQuickSlot(int32 SlotIndex)
 {
     if (!QuickSlotContent.IsValidIndex(SlotIndex)) return;
@@ -78,91 +78,57 @@ void UQuickSlotSubsystem::UseQuickSlot(int32 SlotIndex)
     UInventorySubsystem* InvenSystem = GI->GetSubsystem<UInventorySubsystem>();
     if (!InvenSystem) return;
 
-    bool bItemFound = false;
-
-    // 인벤토리에서 GUID로 아이템을 찾아 쿨다운·조건·효과 처리를 진행합니다.
-    for (FItemData& InvItem : InvenSystem->Content)
+    // 인벤토리에서 GUID로 아이템을 찾아 클라이언트 선검사를 수행합니다.
+    for (const FItemData& InvItem : InvenSystem->Content)
     {
         if (InvItem.ItemID != TargetID) continue;
-
-        bItemFound = true;
-
-        if (InvItem.Quantity <= 0) break;
-
-        if (!InvItem.ItemEffectClass) break;
+        if (InvItem.Quantity <= 0) return;
+        if (!InvItem.ItemEffectClass) return;
 
         // 쿨다운이 남아 있으면 남은 시간을 경고창으로 표시하고 사용을 막습니다.
         float TimeLeft = GetRemainingCooldown(InvItem.ItemEffectClass);
         if (TimeLeft > 0.0f)
         {
-            UWarningSubsystem* WarningSys = GetGameInstance()->GetSubsystem<UWarningSubsystem>();
+            UWarningSubsystem* WarningSys = GI->GetSubsystem<UWarningSubsystem>();
             if (WarningSys)
             {
-                // StringTable의 {0} 플레이스홀더에 남은 시간(소수점 1자리)을 채워 표시합니다.
                 FText FormatPattern = FText::FromStringTable(
                     TEXT("/Game/character/ST_WarningMessages.ST_WarningMessages"),
                     TEXT("Err_Cooldown")
                 );
-
                 FNumberFormattingOptions NumFormat;
                 NumFormat.MaximumFractionalDigits = 1;
                 NumFormat.MinimumFractionalDigits = 1;
-
                 FText FinalWarningText = FText::Format(FormatPattern, FText::AsNumber(TimeLeft, &NumFormat));
                 WarningSys->ShowWarning(FinalWarningText);
             }
             return;
         }
 
-        UItemEffectBase* ItemEffect = NewObject<UItemEffectBase>(this, InvItem.ItemEffectClass);
-        if (!ItemEffect) break;
-
         AMyCharacter* MyChar = Cast<AMyCharacter>(UGameplayStatics::GetPlayerPawn(this, 0));
-        if (!MyChar) break;
+        if (!MyChar) return;
 
-        // HP가 최대치이거나 버프가 이미 활성 중인 경우 등 사용 불가 조건을 검사합니다.
+        // 사용 불가 조건을 클라이언트에서 선검사합니다. (HP 최대치, 버프 중복 등)
+        UItemEffectBase* ItemEffect = NewObject<UItemEffectBase>(this, InvItem.ItemEffectClass);
+        if (!ItemEffect) return;
+
         if (!ItemEffect->CanUseItem(MyChar))
         {
-            UWarningSubsystem* WarningSys = GetGameInstance()->GetSubsystem<UWarningSubsystem>();
+            UWarningSubsystem* WarningSys = GI->GetSubsystem<UWarningSubsystem>();
             if (WarningSys)
             {
                 WarningSys->ShowWarning(ItemEffect->UsageFailMessage);
             }
-            break;
+            return;
         }
 
-        // 효과 적용 → 버프 Niagara VFX 스폰 → 쿨다운 등록
-        ItemEffect->ExecuteItemEffect(MyChar);
-
-        if (InvItem.BuffEffect)
-        {
-            UNiagaraFunctionLibrary::SpawnSystemAttached(
-                InvItem.BuffEffect, MyChar->GetMesh(), NAME_None,
-                FVector(0.f, 0.f, -90.f), FRotator::ZeroRotator,
-                EAttachLocation::KeepRelativeOffset, true);
-        }
-
+        // 쿨다운을 클라이언트에서 즉시 등록해 연속 사용을 방지합니다.
         ApplyCooldown(InvItem.ItemEffectClass, ItemEffect->CooldownTime);
 
-        // 수량을 1 감소하고 퀵슬롯 캐시도 동기화합니다.
-        InvItem.Quantity--;
-        QuickSlotContent[SlotIndex] = InvItem;
-
-        // 수량이 0이 되면 인벤토리 슬롯과 퀵슬롯 모두 빈 데이터로 초기화합니다.
-        if (InvItem.Quantity <= 0)
-        {
-            InvItem = FItemData();
-            QuickSlotContent[SlotIndex] = FItemData();
-        }
-
-        break;
-    }
-
-    // 아이템을 찾아 처리가 완료됐으므로 인벤토리·퀵슬롯 UI를 모두 갱신합니다.
-    if (bItemFound)
-    {
-        if (InvenSystem->OnInventoryUpdated.IsBound()) InvenSystem->OnInventoryUpdated.Broadcast();
-        if (OnQuickSlotUpdated.IsBound())              OnQuickSlotUpdated.Broadcast();
+        // 실제 효과 적용과 수량 감소는 서버 RPC로 처리합니다.
+        // 서버에서 처리 후 Content가 복제되면 OnRep_Inventory → OnInventoryUpdated → SyncQuickSlotsWithInventory 순서로 UI가 자동 갱신됩니다.
+        MyChar->InventoryComp->ServerUseItem(TargetID, SlotIndex);
+        return;
     }
 }
 
