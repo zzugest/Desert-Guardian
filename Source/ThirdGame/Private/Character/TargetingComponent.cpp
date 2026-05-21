@@ -38,29 +38,31 @@ void UTargetingComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
 }
 
 // 카메라 전방 스윕으로 가장 가까운 살아있는 적(Enemy)을 찾아 타겟팅합니다.
+// 로컬에서 직접 조종하는 캐릭터에서만 실행합니다. (서버의 다른 캐릭터 인스턴스에서는 동작하지 않습니다.)
 void UTargetingComponent::FindTarget()
 {
+    AMyCharacter* OwnerChar = Cast<AMyCharacter>(GetOwner());
+    if (!OwnerChar || !OwnerChar->IsLocallyControlled()) return;
+
     // 컷신 중에는 타겟팅을 비활성화합니다.
-    if (AMyCharacter* Owner = Cast<AMyCharacter>(GetOwner()))
+    if (OwnerChar->HasStateTag("State.Cutscene"))
     {
-        if (Owner->HasStateTag("State.Cutscene"))
+        if (AEnemy* OldEnemy = Cast<AEnemy>(CurrentTarget))
         {
-            if (AEnemy* OldEnemy = Cast<AEnemy>(CurrentTarget))
-            {
-                OldEnemy->SetTargetMarkerVisibility(false);
-            }
-            CurrentTarget = nullptr;
-            return;
+            OldEnemy->SetTargetMarkerVisibility(false);
         }
+        CurrentTarget = nullptr;
+        return;
     }
 
-    APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
+    APlayerController* PC = Cast<APlayerController>(OwnerChar->GetController());
     if (!PC) return;
 
     FVector CameraLocation;
     FRotator CameraRotation;
     PC->GetPlayerViewPoint(CameraLocation, CameraRotation);
     FVector CameraForward = CameraRotation.Vector();
+    FVector HorizontalForward = FVector(CameraForward.X, CameraForward.Y, 0.0f).GetSafeNormal();
 
     // 카메라 전방으로 구체를 스윕하여 경로상의 적을 거리순으로 수집합니다.
     TArray<FHitResult> HitResults;
@@ -70,9 +72,9 @@ void UTargetingComponent::FindTarget()
     GetWorld()->SweepMultiByChannel(
         HitResults,
         CameraLocation,
-        CameraLocation + CameraForward * TraceDistance,
+        CameraLocation + HorizontalForward * TraceDistance,
         FQuat::Identity,
-        ECC_Pawn,
+        ECC_GameTraceChannel2,
         FCollisionShape::MakeSphere(SweepRadius),
         SweepParams
     );
@@ -86,11 +88,18 @@ void UTargetingComponent::FindTarget()
         if (!Enemy) continue;
         if (Enemy->IsHidden() || Enemy->bIsDead || !Enemy->bIsTargetable) continue;
 
-        // 카메라 전방 기준 30도(cos 0.866) 이내의 적만 허용합니다.
+        // 수평 전방 기준 60도(cos 0.5) 이내의 적만 허용합니다.
         FVector DirectionToEnemy = (Enemy->GetActorLocation() - CameraLocation).GetSafeNormal();
-        if (FVector::DotProduct(CameraForward, DirectionToEnemy) < 0.866f) continue;
+        if (FVector::DotProduct(HorizontalForward, DirectionToEnemy) < 0.5f) continue;
+
+        // 캐릭터 전방 기준으로도 필터링합니다.
+        // 카메라가 캐릭터 뒤에서 찍을 때 캐릭터 뒤편의 적이 잡히는 것을 방지합니다.
+        FVector CharForward = FVector(OwnerChar->GetActorForwardVector().X, OwnerChar->GetActorForwardVector().Y, 0.0f).GetSafeNormal();
+        FVector CharToEnemy = (Enemy->GetActorLocation() - OwnerChar->GetActorLocation()).GetSafeNormal();
+        if (FVector::DotProduct(CharForward, CharToEnemy) < 0.0f) continue;
 
         // 카메라~적 사이 벽 차단 여부를 LineTrace로 확인합니다.
+        // Pawn/CharacterMesh 프로파일은 ECC_Visibility를 Ignore하므로 플레이어 캐릭터는 자동으로 통과됩니다.
         FHitResult WallHit;
         FCollisionQueryParams LineParams;
         LineParams.AddIgnoredActor(GetOwner());

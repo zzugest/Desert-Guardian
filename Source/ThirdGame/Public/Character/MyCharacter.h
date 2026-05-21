@@ -151,6 +151,59 @@ public:
 	// �Է� �̺�Ʈ�� �����Ͽ� ���� ������ Ʈ�����մϴ�.
 	void Attack(const FInputActionValue& Value);
 
+	// ============================================================
+	// [네트워크] 공격 동기화 RPC
+	// ============================================================
+
+	// 클라이언트 → 서버: 공격 요청. SnapRotation은 공격 시작 시 캐릭터가 바라볼 방향입니다.
+	UFUNCTION(Server, Reliable)
+	void ServerRequestAttack(FRotator SnapRotation);
+
+	// 서버 → 모든 클라이언트: 몽타주 재생 명령. SnapRotation으로 모든 화면에서 방향을 동기화합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayComboMontage(int32 ComboIndex, FRotator SnapRotation);
+
+	// 서버 → 모든 클라이언트: 점프 공격 몽타주(Start 섹션)를 재생합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayJumpAttackMontage();
+
+	// 서버 → 모든 클라이언트: 점프 공격 몽타주를 Loop 섹션으로 전환합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayJumpLoopAnim();
+
+	// 서버 → 모든 클라이언트: 착지 시 점프 공격 몽타주를 End 섹션으로 전환하거나 중단합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayJumpLandingAnim();
+
+	// 클라이언트 → 서버: 마법 공격 요청. 클라이언트의 로컬 타겟을 파라미터로 전달합니다.
+	UFUNCTION(Server, Reliable)
+	void ServerRequestMagicAttack(AActor* TargetActor);
+
+	// 서버 → 모든 클라이언트: 마법 콤보 몽타주를 재생합니다. TargetLocation으로 VFX 위치를 전달합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayMagicMontage(int32 ComboIndex, FVector TargetLocation);
+
+	// 클라이언트 → 서버: 달리기 시작 요청. 서버에서 MaxWalkSpeed를 변경합니다.
+	UFUNCTION(Server, Reliable)
+	void ServerStartSprint();
+
+	// 클라이언트 → 서버: 달리기 중지 요청. 서버에서 MaxWalkSpeed를 복구합니다.
+	UFUNCTION(Server, Reliable)
+	void ServerStopSprint();
+
+	// 클라이언트 → 서버: 구르기 요청. 방향 섹션 이름을 파라미터로 전달합니다.
+	UFUNCTION(Server, Reliable)
+	void ServerRequestRoll(FName SectionName);
+
+	// 서버 → 모든 클라이언트: 구르기 몽타주를 재생합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayRollMontage(FName SectionName);
+
+	// 클라이언트 → 서버: 클라이언트 측 WeaponTrace 히트 위치를 전달해 서버에서 이펙트를 스폰합니다.
+	// 공중 공격 시 서버의 SimulatedProxy 위치 오차로 트레이스가 빗나가는 경우를 보정합니다.
+	UFUNCTION(Server, Unreliable)
+	void ServerReportWeaponHit(FVector HitLocation, FRotator HitNormal);
+
 	// �Է� �̺�Ʈ�� �����Ͽ� ������ ��ȣ�ۿ��� �����մϴ�.
 	void Interact(const FInputActionValue& Value);
 
@@ -313,6 +366,9 @@ public:
 
 	// ���� �ڼ��� ������ ���� �ð� ������Ű�� ���� Ÿ�̸� ��ü�Դϴ�.
 	FTimerHandle CombatTimerHandle;
+
+	// 가장 최근 공격 요청 시 계산한 스냅 방향 — 콤보 이어치기 Multicast에 재사용합니다.
+	FRotator LastSnapRotation = FRotator::ZeroRotator;
 
 	// ���� �Ǵ� �ǰ� �� ���� ��� ���¸� ������ �ð�(��)�Դϴ�.
 	UPROPERTY(EditAnywhere, Category = "Combat")

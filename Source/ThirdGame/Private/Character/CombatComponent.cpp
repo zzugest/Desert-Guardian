@@ -13,6 +13,7 @@
 // =========================================================================================
 
 #include "CombatComponent.h"
+
 #include "MyCharacter.h"
 #include "MySword.h"
 #include "GameFramework/Character.h"
@@ -185,20 +186,7 @@ void UCombatComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActo
         if (CurrentCooldown_Q <= 0.0f) CurrentCooldown_Q = 0.0f;
     }
 
-    // 공격 중이고 타겟이 있을 때만 타겟 방향으로 부드럽게 회전합니다.
-    if (!Owner || !Owner->HasStateTag("State.Action.Attacking")) return;
-    if (!CachedTargetingComp || !CachedTargetingComp->CurrentTarget) return;
-
-    FVector StartLoc  = Owner->GetActorLocation();
-    FVector TargetLoc = CachedTargetingComp->CurrentTarget->GetActorLocation();
-
-    StartLoc.Z  = 0.0f;
-    TargetLoc.Z = 0.0f;
-
-    FRotator TargetRot = (TargetLoc - StartLoc).Rotation();
-    FRotator NewRot    = FMath::RInterpTo(Owner->GetActorRotation(), TargetRot, DeltaTime, AttackTrackingSpeed);
-
-    Owner->SetActorRotation(NewRot);
+    // 공격 중 타겟 방향 회전은 각 콤보 단계 시작 시 PlayComboMontageOnly()의 스냅으로 처리합니다.
 }
 
 // 공격 입력을 받아 현재 상태(공중/지상/콤보 중)에 따라 적절한 공격 루틴으로 분기합니다.
@@ -228,21 +216,60 @@ void UCombatComponent::Attack()
 }
 
 // 지상에서의 콤보 공격 애니메이션을 현재 콤보 단계에 맞는 섹션으로 재생합니다.
+// 콤보 카운터·상태태그 관리(서버 로직)를 처리한 뒤 PlayComboMontageOnly()를 호출합니다.
 void UCombatComponent::PlayComboAnim()
 {
     AMyCharacter* Owner = GetCharacterOwner();
     if (!Owner) return;
 
-    // 콤보 중에는 캐릭터가 원하는 방향을 자유롭게 바라볼 수 있도록 설정합니다.
+    // 공격 중에는 SetActorRotation으로 타겟을 향해 직접 회전하므로
+    // bOrientRotationToMovement와 bUseControllerRotationYaw를 모두 끕니다.
     Owner->bUseControllerRotationYaw = false;
     if (Owner->GetCharacterMovement())
     {
-        Owner->GetCharacterMovement()->bOrientRotationToMovement = true;
+        Owner->GetCharacterMovement()->bOrientRotationToMovement = false;
     }
 
     CurrentCombo = FMath::Clamp(CurrentCombo + 1, 1, MaxCombo);
     Owner->AddStateTag("State.Action.Attacking");
     bIsComboInputOn = false;
+
+    // 공격 시작 시점의 타겟을 캐싱합니다.
+    // TargetingComponent는 0.1초 간격으로 갱신되므로 타이밍에 따라 CurrentTarget이 null이 될 수 있습니다.
+    // 공격 내내 일관된 타겟을 사용하기 위해 이 시점에 한 번만 저장합니다.
+    CombatTargetActor = (CachedTargetingComp) ? CachedTargetingComp->CurrentTarget : nullptr;
+
+    // 실제 몽타주 재생은 PlayComboMontageOnly()가 담당합니다.
+    // (Multicast RPC를 통해 모든 클라이언트에서 호출됩니다.)
+    PlayComboMontageOnly(CurrentCombo);
+}
+
+// 콤보 카운터·상태태그 처리 없이 몽타주 재생만 담당합니다.
+// Multicast RPC(MulticastPlayComboMontage)에서 모든 클라이언트에 일괄 호출됩니다.
+void UCombatComponent::PlayComboMontageOnly(int32 ComboIndex)
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner) return;
+
+    // 클라이언트도 서버와 동일한 회전 플래그 상태를 유지합니다.
+    // SetActorRotation(TickComponent)이 충돌 없이 타겟 방향으로 회전할 수 있도록 합니다.
+    Owner->bUseControllerRotationYaw = false;
+    if (Owner->GetCharacterMovement())
+    {
+        Owner->GetCharacterMovement()->bOrientRotationToMovement = false;
+    }
+
+    // 타겟이 있으면 몽타주 재생 전 즉시 해당 방향을 바라봅니다.
+    // 루트 모션이 처음부터 올바른 방향으로 출발하도록 합니다.
+    if (Owner->IsLocallyControlled() && IsValid(CombatTargetActor))
+    {
+        FVector ToTarget = (CombatTargetActor->GetActorLocation() - Owner->GetActorLocation());
+        ToTarget.Z = 0.f;
+        if (!ToTarget.IsNearlyZero())
+        {
+            Owner->SetActorRotation(ToTarget.Rotation());
+        }
+    }
 
     UAnimInstance* AnimInstance = Owner->GetMesh()->GetAnimInstance();
     if (!AnimInstance || !ComboActionMontage) return;
@@ -250,7 +277,10 @@ void UCombatComponent::PlayComboAnim()
     // 루트 모션을 몽타주에서만 받아 공격 이동 거리를 정밀하게 제어합니다.
     AnimInstance->SetRootMotionMode(ERootMotionMode::RootMotionFromMontagesOnly);
 
-    if (!AnimInstance->Montage_IsPlaying(ComboActionMontage))
+    // Montage_IsPlaying은 블렌드 아웃 중일 때 false를 반환합니다.
+    // Montage_IsActive는 블렌드 아웃 중에도 true를 반환하므로
+    // 콤보 타이밍 경계에서 몽타주가 처음부터 재시작되는 문제를 방지합니다.
+    if (!AnimInstance->Montage_IsActive(ComboActionMontage))
     {
         AnimInstance->Montage_Play(ComboActionMontage);
 
@@ -259,7 +289,7 @@ void UCombatComponent::PlayComboAnim()
         AnimInstance->Montage_SetEndDelegate(EndDelegate, ComboActionMontage);
     }
 
-    FString SectionName = FString::Printf(TEXT("Attack%d"), CurrentCombo);
+    FString SectionName = FString::Printf(TEXT("Attack%d"), ComboIndex);
     AnimInstance->Montage_JumpToSection(FName(*SectionName), ComboActionMontage);
 }
 
@@ -312,8 +342,9 @@ void UCombatComponent::OnAttackMontageEnded(UAnimMontage* Montage, bool bInterru
         }
     }
 
-    bIsComboInputOn = false;
-    CurrentCombo    = 0;
+    bIsComboInputOn   = false;
+    CurrentCombo      = 0;
+    CombatTargetActor = nullptr;
 }
 
 // 공중에서 공격 키 입력 시 점프 공격 몽타주의 'Start' 섹션을 재생합니다.
@@ -518,7 +549,11 @@ void UCombatComponent::WeaponTraceTick()
         AEnemy* HitEnemy = Cast<AEnemy>(HitActor);
         if (HitEnemy && HitEnemy->bIsDead) continue;
 
-        UGameplayStatics::ApplyDamage(HitActor, FinalDamage, Owner->GetController(), Owner, UDamageType::StaticClass());
+        // 데미지는 서버에서만 한 번 적용합니다. (클라이언트 중복 적용 방지)
+        if (Owner->HasAuthority())
+        {
+            UGameplayStatics::ApplyDamage(HitActor, FinalDamage, Owner->GetController(), Owner, UDamageType::StaticClass());
+        }
 
         // 히트 위치에 이펙트 스폰 (Niagara 우선, 없으면 Cascade)
         if (HitEffect)
@@ -534,7 +569,18 @@ void UCombatComponent::WeaponTraceTick()
                 Hit.ImpactPoint, Hit.ImpactNormal.Rotation());
         }
 
-        Owner->OnSpawnDamageText(Hit.ImpactPoint, FinalDamage);
+        // 클라이언트 로컬 히트를 서버에 보고해 서버 화면에서도 이펙트가 보이도록 합니다.
+        // 특히 공중 공격 시 서버의 SimulatedProxy 위치 오차로 WeaponTrace가 빗나가는 경우를 보정합니다.
+        if (!Owner->HasAuthority() && Owner->IsLocallyControlled())
+        {
+            Owner->ServerReportWeaponHit(Hit.ImpactPoint, Hit.ImpactNormal.Rotation());
+        }
+
+        // 데미지 텍스트는 공격한 본인 화면에서만 표시합니다.
+        if (Owner->IsLocallyControlled())
+        {
+            Owner->OnSpawnDamageText(Hit.ImpactPoint, FinalDamage);
+        }
         Owner->EnterCombatStance();
     }
 }
@@ -609,13 +655,40 @@ void UCombatComponent::RightClickMagicAttack()
     Owner->AddStateTag("State.Action.MagicCasting");
     Owner->EnterCombatStance();
 
+    // 실제 몽타주 재생은 PlayMagicMontageOnly()가 담당합니다.
+    // (Multicast RPC를 통해 모든 클라이언트에서 호출됩니다.)
+    PlayMagicMontageOnly(CurrentMagicCombo);
+}
+
+// 마법 콤보 로직 처리 없이 몽타주 재생만 담당합니다.
+// Multicast RPC(MulticastPlayMagicMontage)에서 모든 클라이언트에 일괄 호출됩니다.
+// TargetLocation이 유효하면 AnimNotify(SpawnMagicVFX)가 실행되기 전에 CachedMagicLocation을 미리 설정합니다.
+void UCombatComponent::PlayMagicMontageOnly(int32 ComboIndex, FVector TargetLocation)
+{
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner) return;
+
+    // AnimNotify(SpawnMagicVFX, ApplyMagicDamage)가 CurrentMagicCombo를 참조하므로
+    // 몽타주 재생 전에 반드시 동기화합니다. (서버에서만 RightClickMagicAttack()이 설정하기 때문)
+    CurrentMagicCombo = ComboIndex;
+
+    // 서버로부터 전달받은 타겟 위치를 몽타주 재생 전에 미리 캐싱합니다.
+    // AnimNotify(SpawnMagicVFX)가 실행될 때 CurrentTarget이 없어도 올바른 위치에 VFX를 스폰합니다.
+    if (!TargetLocation.IsZero())
+    {
+        CachedMagicLocation = TargetLocation;
+    }
+
+    UAnimInstance* AnimInstance = Owner->GetMesh()->GetAnimInstance();
+    if (!AnimInstance || !MagicComboMontage) return;
+
     AnimInstance->Montage_Play(MagicComboMontage);
 
     FOnMontageEnded EndDelegate;
     EndDelegate.BindUObject(this, &UCombatComponent::OnMagicMontageEnded);
     AnimInstance->Montage_SetEndDelegate(EndDelegate, MagicComboMontage);
 
-    FString SectionName = FString::Printf(TEXT("Attack%d"), CurrentMagicCombo);
+    FString SectionName = FString::Printf(TEXT("Attack%d"), ComboIndex);
     AnimInstance->Montage_JumpToSection(FName(*SectionName), MagicComboMontage);
 }
 
@@ -645,14 +718,22 @@ void UCombatComponent::ResetMagicCombo()
     GetWorld()->GetTimerManager().ClearTimer(MagicComboTimerHandle);
 }
 
-// AnimNotify에서 호출되며, 현재 타겟 위치에 마법 이펙트(Niagara)를 스폰합니다.
+// AnimNotify에서 호출되며, 타겟 위치에 마법 이펙트(Niagara)를 스폰합니다.
+// CurrentTarget이 있으면 최신 위치를 갱신하고, 없으면 PlayMagicMontageOnly에서 미리 설정한 CachedMagicLocation을 사용합니다.
 void UCombatComponent::SpawnMagicVFX()
 {
     AMyCharacter* Owner = GetCharacterOwner();
-    if (!Owner || !Owner->TargetingComp || !Owner->TargetingComp->CurrentTarget) return;
+    if (!Owner) return;
 
-    // 타겟 위치를 캐싱해 이후 ApplyMagicDamage에서 재사용합니다.
-    CachedMagicLocation = Owner->TargetingComp->CurrentTarget->GetActorLocation();
+    // CurrentTarget이 있으면 최신 위치로 갱신합니다. (로컬 조종 캐릭터 또는 서버 측)
+    // 없으면 PlayMagicMontageOnly에서 Multicast를 통해 미리 전달받은 CachedMagicLocation을 그대로 사용합니다.
+    if (Owner->TargetingComp && Owner->TargetingComp->CurrentTarget)
+    {
+        CachedMagicLocation = Owner->TargetingComp->CurrentTarget->GetActorLocation();
+    }
+
+    // 유효한 위치가 없으면 VFX를 스폰하지 않습니다.
+    if (CachedMagicLocation.IsZero()) return;
 
     int32 EffectIndex = CurrentMagicCombo - 1;
     if (MagicExplosionVFXs.IsValidIndex(EffectIndex) && MagicExplosionVFXs[EffectIndex] != nullptr)
@@ -673,6 +754,9 @@ void UCombatComponent::ApplyMagicDamage()
 {
     AMyCharacter* Owner = GetCharacterOwner();
     if (!Owner || !AttackDataTable) return;
+
+    // 데미지 적용(서버)과 데미지 텍스트(로컬) 중 하나도 해당하지 않으면 조기 종료합니다.
+    if (!Owner->HasAuthority() && !Owner->IsLocallyControlled()) return;
 
     FString RowNameStr  = FString::Printf(TEXT("Magic%d"), CurrentMagicCombo);
     FName   MagicAttackID = FName(*RowNameStr);
@@ -711,8 +795,18 @@ void UCombatComponent::ApplyMagicDamage()
                     AEnemy* HitEnemy = Cast<AEnemy>(HitPawn);
                     if (HitEnemy && HitEnemy->bIsDead) continue;
 
-                    UGameplayStatics::ApplyDamage(HitPawn, FinalDamage, Owner->GetController(), Owner, UDamageType::StaticClass());
-                    Owner->OnSpawnDamageText(Hit.ImpactPoint, FinalDamage);
+                    // 데미지는 서버에서만 한 번 적용합니다. (클라이언트 중복 적용 방지)
+                    if (Owner->HasAuthority())
+                    {
+                        UGameplayStatics::ApplyDamage(HitPawn, FinalDamage, Owner->GetController(), Owner, UDamageType::StaticClass());
+                    }
+
+                    // 데미지 텍스트는 공격한 본인 화면에서만 표시합니다.
+                    if (Owner->IsLocallyControlled())
+                    {
+                        Owner->OnSpawnDamageText(Hit.ImpactPoint, FinalDamage);
+                    }
+
                     DamagedActors.Add(HitActor);
                 }
             }
@@ -720,6 +814,22 @@ void UCombatComponent::ApplyMagicDamage()
     }
 
     Owner->EnterCombatStance();
+}
+
+// 지정 위치에 히트 이펙트를 스폰합니다.
+// ServerReportWeaponHit RPC를 통해 클라이언트가 보고한 히트 위치에 서버에서 직접 스폰합니다.
+void UCombatComponent::SpawnHitEffectAt(FVector HitLocation, FRotator HitNormal)
+{
+    if (HitEffect)
+    {
+        UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+            GetWorld(), HitEffect, HitLocation, HitNormal);
+    }
+    else if (HitEffectCascade)
+    {
+        UGameplayStatics::SpawnEmitterAtLocation(
+            GetWorld(), HitEffectCascade, HitLocation, HitNormal);
+    }
 }
 
 // 스킬 또는 아이템 버프를 적용합니다. bFromItem 플래그로 두 경로를 완전히 분리해 중첩을 허용합니다.

@@ -29,6 +29,7 @@
 
 
 #include "MyCharacter.h"
+
 #include "MinimapComponent.h"
 #include "MinimapWidget.h"
 #include "Character/HUDRootWidget.h"
@@ -291,18 +292,151 @@ void AMyCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
     }
 }
 
-// 좌클릭 공격 입력을 CombatComponent로 전달합니다.
+// 좌클릭 공격 입력 시 타겟 방향을 계산해 서버에 공격을 요청합니다.
 void AMyCharacter::Attack(const FInputActionValue& Value)
 {
     if (!CombatComp) return;
+
+    // 타겟이 있으면 그 방향, 없으면 현재 방향 그대로 전달합니다.
+    FRotator SnapRotation = GetActorRotation();
+    if (TargetingComp && TargetingComp->CurrentTarget)
+    {
+        FVector ToTarget = TargetingComp->CurrentTarget->GetActorLocation() - GetActorLocation();
+        ToTarget.Z = 0.f;
+        if (!ToTarget.IsNearlyZero())
+        {
+            SnapRotation = ToTarget.Rotation();
+        }
+    }
+
+    ServerRequestAttack(SnapRotation);
+}
+
+// 서버에서 실행: 기존 Attack() 로직을 서버에서 처리한 뒤 클라이언트에 애님을 동기화합니다.
+void AMyCharacter::ServerRequestAttack_Implementation(FRotator SnapRotation)
+{
+    if (!CombatComp) return;
+
+    // 클라이언트가 전달한 스냅 방향을 저장합니다. (콤보 이어치기 Multicast에 재사용)
+    LastSnapRotation = SnapRotation;
+
+    // 서버에서도 몽타주 재생 전에 캐릭터를 스냅 방향으로 먼저 회전시킵니다.
+    // 서버와 클라이언트가 동일한 초기 방향에서 루트 모션을 시작해야 CMC 위치 보정이 발생하지 않습니다.
+    SetActorRotation(SnapRotation);
+
+    // 공격 시작 전 상태를 기록해 실제로 새 공격이 시작됐는지 판단합니다.
+    bool bWasAttacking = HasStateTag("State.Action.Attacking");
+
+    // 기존 CombatComponent 공격 로직 전체를 서버에서 실행합니다.
+    // (상태 체크, 콤보 카운터, 상태태그, 루트모션 설정, 몽타주 재생 포함)
     CombatComp->Attack();
+
+    // 새 공격이 시작된 경우에만 Multicast로 클라이언트에 애님을 동기화합니다.
+    // (공격 중 콤보 입력 플래그만 세운 경우는 제외 — ProcessComboCommand에서 처리)
+    if (!bWasAttacking && HasStateTag("State.Action.Attacking"))
+    {
+        if (!HasStateTag("State.Movement.InAir"))
+        {
+            // 지상 콤보 1번째 공격 — 스냅 방향을 함께 전달합니다.
+            MulticastPlayComboMontage(CombatComp->CurrentCombo, SnapRotation);
+        }
+        else
+        {
+            // 공중 점프 공격 Start 섹션
+            MulticastPlayJumpAttackMontage();
+        }
+    }
+}
+
+// 모든 클라이언트에서 실행: 해당 콤보 단계의 몽타주를 재생합니다.
+// Listen Server Host는 CombatComp->Attack()에서 이미 재생했으므로 스킵합니다.
+// State.Action.Attacking 태그를 직접 추가해 CombatComponent::TickComponent()의 타겟 방향 회전 추적을 활성화합니다.
+// (ActionTags는 복제되지 않으므로 Multicast 수신 측에서 직접 설정합니다.)
+void AMyCharacter::MulticastPlayComboMontage_Implementation(int32 ComboIndex, FRotator SnapRotation)
+{
+    if (HasAuthority()) return;
+    if (!CombatComp) return;
+
+    // 서버로부터 전달받은 스냅 방향을 모든 클라이언트에 즉시 적용합니다.
+    // IsLocallyControlled() 여부와 무관하게 적용해 모든 화면에서 방향이 동기화됩니다.
+    SetActorRotation(SnapRotation);
+    AddStateTag("State.Action.Attacking");
+    CombatComp->CombatTargetActor = TargetingComp ? TargetingComp->CurrentTarget : nullptr;
+    CombatComp->PlayComboMontageOnly(ComboIndex);
+}
+
+// 모든 클라이언트에서 실행: 점프 공격 몽타주(Start 섹션)를 재생합니다.
+// Listen Server Host는 CombatComp->Attack()에서 이미 재생했으므로 스킵합니다.
+void AMyCharacter::MulticastPlayJumpAttackMontage_Implementation()
+{
+    if (HasAuthority()) return;
+    if (!CombatComp) return;
+    CombatComp->PlayJumpAttackAnim();
+}
+
+// 모든 클라이언트에서 실행: 점프 공격 몽타주를 Loop 섹션으로 전환합니다.
+// Listen Server Host는 CombatComp->ProcessComboCommand()에서 이미 처리했으므로 스킵합니다.
+void AMyCharacter::MulticastPlayJumpLoopAnim_Implementation()
+{
+    if (HasAuthority()) return;
+    if (!CombatComp) return;
+    CombatComp->PlayJumpLoopAnim();
+}
+
+// 모든 클라이언트에서 실행: 착지 시 점프 공격 몽타주를 End 섹션으로 전환하거나 중단합니다.
+// Listen Server Host는 Landed()에서 이미 처리했으므로 스킵합니다.
+void AMyCharacter::MulticastPlayJumpLandingAnim_Implementation()
+{
+    if (HasAuthority()) return;
+    if (!CombatComp) return;
+    CombatComp->PlayJumpLandingAnim();
 }
 
 // 애니메이션 몽타주 중간에 발생하는 콤보 입력을 CombatComponent로 전달합니다.
+// 서버에서 콤보가 실제로 진행된 경우 모든 클라이언트에 다음 단계 애님을 동기화합니다.
 void AMyCharacter::ProcessComboCommand()
 {
     if (!CombatComp) return;
+
+    // 진행 여부 감지를 위해 호출 전 상태를 기록합니다.
+    int32 ComboBefore = CombatComp->CurrentCombo;
+    bool bWasComboInput = CombatComp->bIsComboInputOn;
+
     CombatComp->ProcessComboCommand();
+
+    if (!HasAuthority()) return;
+
+    int32 ComboAfter = CombatComp->CurrentCombo;
+
+    if (!HasStateTag("State.Movement.InAir"))
+    {
+        // 지상: 콤보 카운터가 증가했으면 다음 콤보 섹션을 동기화합니다.
+        if (ComboAfter > ComboBefore)
+        {
+            // 서버 플레이어는 CombatTargetActor에서, 클라이언트 플레이어는 LastSnapRotation을 재사용합니다.
+            FRotator SnapRot = GetActorRotation();
+            if (IsValid(CombatComp->CombatTargetActor))
+            {
+                FVector ToTarget = CombatComp->CombatTargetActor->GetActorLocation() - GetActorLocation();
+                ToTarget.Z = 0.f;
+                if (!ToTarget.IsNearlyZero()) SnapRot = ToTarget.Rotation();
+            }
+            else
+            {
+                SnapRot = LastSnapRotation;
+            }
+            MulticastPlayComboMontage(ComboAfter, SnapRot);
+        }
+    }
+    else
+    {
+        // 공중: 콤보 입력이 있었으면 Loop 섹션 전환을 동기화합니다.
+        // (PlayJumpLoopAnim은 CurrentCombo를 바꾸지 않으므로 bWasComboInput으로 감지)
+        if (bWasComboInput)
+        {
+            MulticastPlayJumpLoopAnim();
+        }
+    }
 }
 
 // 인벤토리 내용이 변경되었을 때 UI가 열려 있다면 최신 데이터로 갱신합니다.
@@ -588,6 +722,13 @@ void AMyCharacter::Landed(const FHitResult& Hit)
     {
         CombatComp->PlayJumpLandingAnim();
     }
+
+    // 서버에서 착지했을 때 클라이언트에도 Loop → End 전환을 동기화합니다.
+    // (클라이언트는 SimulatedProxy라 Landed()가 신뢰성 있게 호출되지 않으므로 명시적으로 전송)
+    if (HasAuthority())
+    {
+        MulticastPlayJumpLandingAnim();
+    }
 }
 
 // 피격 시 구르기 무적 여부를 판단하고, 실제 피해를 CombatComponent에 전달해 HP를 감소시킵니다.
@@ -631,63 +772,48 @@ void AMyCharacter::StartSprint()
 
     if (HasStateTag("State.Stance.Combat"))
     {
-        // 전투 자세: 스태미나 소모 후 입력 방향에 따른 8방향 구르기 몽타주 재생
         float RollCost = 20.0f;
+        if (!CombatComp || CombatComp->CurrentSP < RollCost) return;
 
-        if (CombatComp && CombatComp->CurrentSP >= RollCost)
+        // 입력 방향(가속도)과 캐릭터 전방·우측 벡터의 내적으로 8방향 섹션 결정
+        FVector Accel = GetCharacterMovement()->GetCurrentAcceleration();
+        FName SectionName = FName("Backward");
+
+        if (!Accel.IsNearlyZero())
         {
-            CombatComp->CurrentSP -= RollCost;
+            Accel.Normalize();
+            float ForwardDot = FVector::DotProduct(GetActorForwardVector(), Accel);
+            float RightDot   = FVector::DotProduct(GetActorRightVector(),   Accel);
 
-            if (PlayerHUD != nullptr)
+            if (ForwardDot >= 0.5f)
             {
-                PlayerHUD->UpdateState(
-                    CombatComp->CurrentHP, CombatComp->MaxHP,
-                    CombatComp->CurrentMP, CombatComp->MaxMP,
-                    CombatComp->CurrentSP, CombatComp->MaxSP
-                );
+                SectionName = (RightDot > 0.5f) ? FName("ForwardRight") : (RightDot < -0.5f) ? FName("ForwardLeft") : FName("Forward");
             }
-
-            UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
-            if (AnimInstance && CombatRollMontage)
+            else if (ForwardDot <= -0.5f)
             {
-                AddStateTag("State.Action.Rolling");
-
-                FVector Accel = GetCharacterMovement()->GetCurrentAcceleration();
-                FName SectionName = FName("Forward");
-
-                // 입력 방향(가속도)과 캐릭터 전방·우측 벡터의 내적으로 8방향 섹션 결정
-                if (!Accel.IsNearlyZero())
-                {
-                    Accel.Normalize();
-                    float ForwardDot = FVector::DotProduct(GetActorForwardVector(), Accel);
-                    float RightDot   = FVector::DotProduct(GetActorRightVector(),   Accel);
-
-                    if (ForwardDot >= 0.5f)
-                    {
-                        SectionName = (RightDot > 0.5f) ? FName("ForwardRight") : (RightDot < -0.5f) ? FName("ForwardLeft") : FName("Forward");
-                    }
-                    else if (ForwardDot <= -0.5f)
-                    {
-                        SectionName = (RightDot > 0.5f) ? FName("BackwardRight") : (RightDot < -0.5f) ? FName("BackwardLeft") : FName("Backward");
-                    }
-                    else
-                    {
-                        SectionName = (RightDot > 0.0f) ? FName("Right") : FName("Left");
-                    }
-                }
-                else
-                {
-                    SectionName = FName("Backward");
-                }
-
-                AnimInstance->Montage_Play(CombatRollMontage);
-                AnimInstance->Montage_JumpToSection(SectionName, CombatRollMontage);
-
-                FOnMontageEnded EndDelegate;
-                EndDelegate.BindUObject(this, &AMyCharacter::OnRollMontageEnded);
-                AnimInstance->Montage_SetEndDelegate(EndDelegate, CombatRollMontage);
+                SectionName = (RightDot > 0.5f) ? FName("BackwardRight") : (RightDot < -0.5f) ? FName("BackwardLeft") : FName("Backward");
+            }
+            else
+            {
+                SectionName = (RightDot > 0.0f) ? FName("Right") : FName("Left");
             }
         }
+
+        // 로컬에서 즉시 상태 태그와 몽타주를 반영해 반응성을 확보합니다.
+        // Multicast가 도착하기 전에 Shift를 다시 누르는 경우를 방지합니다.
+        AddStateTag("State.Action.Rolling");
+        UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
+        if (AnimInstance && CombatRollMontage)
+        {
+            AnimInstance->Montage_Play(CombatRollMontage);
+            AnimInstance->Montage_JumpToSection(SectionName, CombatRollMontage);
+            FOnMontageEnded EndDelegate;
+            EndDelegate.BindUObject(this, &AMyCharacter::OnRollMontageEnded);
+            AnimInstance->Montage_SetEndDelegate(EndDelegate, CombatRollMontage);
+        }
+
+        // 클라이언트에서 계산한 방향을 서버로 전달합니다.
+        ServerRequestRoll(SectionName);
         return;
     }
 
@@ -696,11 +822,29 @@ void AMyCharacter::StartSprint()
     {
         bIsSprinting = true;
         GetCharacterMovement()->MaxWalkSpeed = 800.0f;
+        // 서버에도 속도 변경을 요청합니다. 서버가 같은 속도를 사용해야 위치 보정이 발생하지 않습니다.
+        ServerStartSprint();
     }
 }
 
 // Shift 키를 떼면 이동 속도를 기본값으로 복구하고 달리기 플래그를 해제합니다.
 void AMyCharacter::StopSprint()
+{
+    bIsSprinting = false;
+    GetCharacterMovement()->MaxWalkSpeed = 500.0f;
+    // 서버에도 속도 복구를 요청합니다.
+    ServerStopSprint();
+}
+
+// 서버에서 실행: MaxWalkSpeed를 달리기 속도로 변경합니다.
+void AMyCharacter::ServerStartSprint_Implementation()
+{
+    bIsSprinting = true;
+    GetCharacterMovement()->MaxWalkSpeed = 800.0f;
+}
+
+// 서버에서 실행: MaxWalkSpeed를 기본 이동 속도로 복구합니다.
+void AMyCharacter::ServerStopSprint_Implementation()
 {
     bIsSprinting = false;
     GetCharacterMovement()->MaxWalkSpeed = 500.0f;
@@ -733,17 +877,117 @@ void AMyCharacter::ExitCombatStance()
     }
 }
 
+// 서버에서 실행: 스태미나 소모 및 구르기 로직을 처리한 뒤 모든 클라이언트에 애님을 동기화합니다.
+void AMyCharacter::ServerRequestRoll_Implementation(FName SectionName)
+{
+    if (!CombatComp) return;
+
+    float RollCost = 20.0f;
+    if (CombatComp->CurrentSP < RollCost) return;
+
+    CombatComp->CurrentSP -= RollCost;
+
+    // 로컬 조종 캐릭터(호스트)는 StartSprint()에서 이미 재생했으므로 생략합니다.
+    // 다시 재생하면 M1이 중단되면서 EndDelegate가 발동해 Rolling 태그가 조기 제거됩니다.
+    if (!IsLocallyControlled())
+    {
+        UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
+        if (!AnimInstance || !CombatRollMontage) return;
+
+        AddStateTag("State.Action.Rolling");
+
+        AnimInstance->Montage_Play(CombatRollMontage);
+        AnimInstance->Montage_JumpToSection(SectionName, CombatRollMontage);
+
+        FOnMontageEnded EndDelegate;
+        EndDelegate.BindUObject(this, &AMyCharacter::OnRollMontageEnded);
+        AnimInstance->Montage_SetEndDelegate(EndDelegate, CombatRollMontage);
+    }
+
+    MulticastPlayRollMontage(SectionName);
+}
+
+// 모든 클라이언트에서 실행: 다른 플레이어 화면(SimulatedProxy)에 구르기 몽타주를 재생합니다.
+// Listen Server Host는 ServerRequestRoll에서 이미 재생했으므로 스킵합니다.
+// 로컬 클라이언트는 StartSprint()에서 이미 즉시 재생했으므로 스킵합니다.
+void AMyCharacter::MulticastPlayRollMontage_Implementation(FName SectionName)
+{
+    if (HasAuthority()) return;
+    if (IsLocallyControlled()) return;
+
+    UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
+    if (!AnimInstance || !CombatRollMontage) return;
+
+    AddStateTag("State.Action.Rolling");
+
+    AnimInstance->Montage_Play(CombatRollMontage);
+    AnimInstance->Montage_JumpToSection(SectionName, CombatRollMontage);
+
+    FOnMontageEnded EndDelegate;
+    EndDelegate.BindUObject(this, &AMyCharacter::OnRollMontageEnded);
+    AnimInstance->Montage_SetEndDelegate(EndDelegate, CombatRollMontage);
+}
+
 // 구르기 몽타주가 끝나면 구르기 상태 태그를 제거해 정상 상태로 복귀시킵니다.
 void AMyCharacter::OnRollMontageEnded(UAnimMontage* Montage, bool bInterrupted)
 {
     RemoveStateTag("State.Action.Rolling");
 }
 
-// 우클릭 마법 공격 입력을 CombatComponent로 전달합니다.
+// 서버에서 실행: 클라이언트가 전달한 히트 위치에 이펙트를 스폰합니다.
+// 공중 공격 시 서버의 SimulatedProxy 위치 오차로 WeaponTrace가 빗나가는 경우를 보정합니다.
+void AMyCharacter::ServerReportWeaponHit_Implementation(FVector HitLocation, FRotator HitNormal)
+{
+    if (!CombatComp) return;
+    CombatComp->SpawnHitEffectAt(HitLocation, HitNormal);
+}
+
+// 우클릭 마법 공격 입력 시 로컬 타겟을 파라미터로 담아 서버에 마법 공격을 요청합니다.
 void AMyCharacter::MagicAttack()
 {
     if (CombatComp)
     {
-        CombatComp->RightClickMagicAttack();
+        if (HasStateTag("State.Action.Rolling")) return;
+        AActor* LocalTarget = TargetingComp ? TargetingComp->CurrentTarget : nullptr;
+        if (!LocalTarget) return;
+        EnterCombatStance();
+        ServerRequestMagicAttack(LocalTarget);
     }
+}
+
+// 서버에서 실행: 클라이언트가 전달한 타겟을 주입한 뒤 마법 콤보 로직을 처리하고 클라이언트에 동기화합니다.
+void AMyCharacter::ServerRequestMagicAttack_Implementation(AActor* TargetActor)
+{
+    if (!CombatComp) return;
+
+    // 클라이언트의 로컬 타겟을 서버의 TargetingComp에 주입합니다.
+    // (TargetingComponent는 로컬 전용으로 동작하므로 서버 측 CurrentTarget이 비어 있습니다.)
+    if (TargetingComp)
+    {
+        TargetingComp->CurrentTarget = TargetActor;
+    }
+
+    // 마법 시전 시작 전 상태를 기록해 실제로 새 마법이 시작됐는지 판단합니다.
+    bool bWasCasting = HasStateTag("State.Action.MagicCasting");
+
+    // 기존 마법 공격 로직 전체를 서버에서 실행합니다.
+    // (상태 체크, 마나 소모, 콤보 카운터, 상태태그, 몽타주 재생 포함)
+    CombatComp->RightClickMagicAttack();
+
+    // 새 마법이 실제로 시작된 경우에만 Multicast로 클라이언트에 동기화합니다.
+    // TargetActor의 위치를 함께 전달해 클라이언트에서도 VFX를 올바른 위치에 스폰할 수 있게 합니다.
+    if (!bWasCasting && HasStateTag("State.Action.MagicCasting"))
+    {
+        MulticastPlayMagicMontage(CombatComp->CurrentMagicCombo, TargetActor->GetActorLocation());
+    }
+}
+
+// 모든 클라이언트에서 실행: 해당 콤보 단계의 마법 몽타주를 재생합니다.
+// TargetLocation을 CombatComponent에 미리 전달해 VFX가 올바른 위치에 스폰되도록 합니다.
+// Listen Server Host는 RightClickMagicAttack()에서 이미 재생했으므로 스킵합니다.
+void AMyCharacter::MulticastPlayMagicMontage_Implementation(int32 ComboIndex, FVector TargetLocation)
+{
+    if (HasAuthority()) return;
+    if (!CombatComp) return;
+    CombatComp->PlayMagicMontageOnly(ComboIndex, TargetLocation);
 }

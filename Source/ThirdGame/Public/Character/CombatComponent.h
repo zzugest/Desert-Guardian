@@ -60,9 +60,6 @@ protected:
     UPROPERTY(EditDefaultsOnly, Category = "Combat|Magic")
     UAnimMontage* MagicComboMontage;
 
-    // ���� ���� �޺� �ܰ�
-    int32 CurrentMagicCombo = 0;
-
     // �ִ� ���� �޺� �� (��: 3)
     int32 MaxMagicCombo = 3;
 
@@ -88,7 +85,15 @@ protected:
 
 
 
+
 public:
+    // 현재 마법 콤보 단계 (MyCharacter의 Server RPC에서 접근하므로 public)
+    int32 CurrentMagicCombo = 0;
+
+    // 공격 시작 시점에 캡처한 타겟 — TargetingComponent 스캔 타이밍과 무관하게 공격 내내 회전 기준으로 사용합니다.
+    UPROPERTY()
+    AActor* CombatTargetActor = nullptr;
+
     // �ִ� ü��
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Status")
     float MaxHP = 100.0f;
@@ -166,6 +171,9 @@ public:
     // ���� �޺� �ִϸ��̼� ������ ���̸� ���
     void PlayComboAnim();
 
+    // 콤보 카운터·상태태그 처리 없이 몽타주 재생만 담당합니다. (Multicast RPC에서 호출)
+    void PlayComboMontageOnly(int32 ComboIndex);
+
     // �ִϸ��̼� �̺�Ʈ(��Ƽ����) ���� ��, ���Է� ������ ���� �ִٸ� ���� �޺��� ����
     UFUNCTION(BlueprintCallable, Category = "Combat")
     void ProcessComboCommand();
@@ -231,6 +239,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Combat|Magic")
     void RightClickMagicAttack();
 
+    // 마법 몽타주 재생만 담당합니다. (Multicast RPC에서 모든 클라이언트에 호출)
+    // TargetLocation이 유효하면 몽타주 재생 전에 CachedMagicLocation을 미리 설정합니다.
+    void PlayMagicMontageOnly(int32 ComboIndex, FVector TargetLocation = FVector::ZeroVector);
+
 
 
     // 기본 공격 히트 이펙트 — Niagara (둘 중 하나만 할당하면 됨)
@@ -289,4 +301,7 @@ public:
 
     // bFromItem = true 이면 아이템 버프 경로, false 이면 스킬 버프 경로로 처리합니다.
     void ApplyAttackBuff(float Amount, float Duration, FName BuffID, bool bFromItem = false);
+
+    // 지정 위치에 히트 이펙트를 스폰합니다. (서버에서 클라이언트 히트 보고를 받았을 때 호출)
+    void SpawnHitEffectAt(FVector HitLocation, FRotator HitNormal);
 };
