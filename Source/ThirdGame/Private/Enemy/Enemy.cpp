@@ -369,13 +369,20 @@ void AEnemy::OnTargetDetected(AActor* Actor, FAIStimulus Stimulus)
 	UBlackboardComponent* BBComp = AIC->GetBlackboardComponent();
 	if (!BBComp) return;
 
-	// 감지 성공 시 블랙보드에 타겟을 설정하고, 소실 시 지웁니다.
+	AMyCharacter* CurrentTarget = Cast<AMyCharacter>(BBComp->GetValueAsObject(TEXT("TargetPlayer")));
+
 	if (Stimulus.WasSuccessfullySensed())
 	{
+		// 이미 추적 중인 타겟이 있으면 교체하지 않습니다.
+		if (CurrentTarget) return;
+
 		BBComp->SetValueAsObject(TEXT("TargetPlayer"), PlayerCharacter);
 	}
 	else
 	{
+		// 사라진 액터가 현재 타겟일 때만 클리어합니다.
+		if (CurrentTarget != PlayerCharacter) return;
+
 		BBComp->ClearValue(TEXT("TargetPlayer"));
 	}
 }
@@ -528,6 +535,19 @@ void AEnemy::CheckLeash()
 		if (AICon && AICon->GetBlackboardComponent())
 		{
 			AICon->GetBlackboardComponent()->SetValueAsBool(TEXT("IsReturning"), false);
+		}
+
+		// 귀환 완료 시 이전 타겟을 해제하고 퍼셉션을 초기화합니다.
+		// ForgetAll()로 퍼셉션 기억을 지워야 시야 내 플레이어를 처음 본 것처럼 재감지합니다.
+		// (블랙보드만 지우면 퍼셉션 상태 변화가 없어 OnTargetDetected가 재발동되지 않습니다.)
+		AAIController* AICon2 = Cast<AAIController>(GetController());
+		if (AICon2 && AICon2->GetBlackboardComponent())
+		{
+			AICon2->GetBlackboardComponent()->ClearValue(TEXT("TargetPlayer"));
+		}
+		if (AIPerceptionComp)
+		{
+			AIPerceptionComp->ForgetAll();
 		}
 
 		// 플레이어가 구역을 벗어난 상태라면 슬립 모드로 전환합니다.

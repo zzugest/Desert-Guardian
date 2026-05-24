@@ -63,8 +63,8 @@ void UPortalConfirmWidget::OnAcceptClicked()
         }
     }
 
-    // 모든 상태를 복구한 뒤 새 레벨로 이동합니다.
-    UGameplayStatics::OpenLevel(this, SavedMapName);
+    // 포탈 이동 로직은 Persistent Level + 서브레벨 방식으로 교체 예정입니다.
+    // (현재 임시 비활성화)
 }
 
 // 거절 버튼: 확인창을 닫고 플레이어 입력과 마우스 상태를 원래대로 복구합니다.

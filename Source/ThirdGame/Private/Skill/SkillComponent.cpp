@@ -1,7 +1,7 @@
 #include "Skill/SkillComponent.h"
 #include "Skill/SkillSubsystem.h"
 #include "Skill/SkillData.h"
-#include "CombatComponent.h" 
+#include "CombatComponent.h"
 #include "GameFramework/Character.h"
 #include "Kismet/GameplayStatics.h"
 #include "NiagaraFunctionLibrary.h"
@@ -53,6 +53,16 @@ void USkillComponent::BeginPlay()
 				OnBuffListUpdated.Broadcast();
 			}
 		}
+	}
+
+	bool bIsServer = GetOwner() && GetOwner()->HasAuthority();
+	UE_LOG(LogTemp, Warning, TEXT("[LV_TRAVEL] SkillComp BeginPlay | Auth:%s | Cooldowns:%d | Buffs:%d"),
+		bIsServer ? TEXT("SERVER") : TEXT("CLIENT"),
+		ActiveCooldowns.Num(), ActiveBuffs.Num());
+	for (const FActiveBuff& Buff : ActiveBuffs)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[LV_TRAVEL]   - SkillBuff: %s | Remaining:%.1fs"),
+			*Buff.BuffID.ToString(), Buff.RemainingTime);
 	}
 }
 

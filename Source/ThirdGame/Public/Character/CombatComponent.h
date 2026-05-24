@@ -15,6 +15,24 @@
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnCombatBuffUpdated);
 
+USTRUCT(BlueprintType)
+struct FActiveBuffInfo
+{
+    GENERATED_BODY()
+
+    UPROPERTY()
+    FName BuffID;
+
+    UPROPERTY()
+    float Amount = 0.0f;
+
+    UPROPERTY()
+    float MaxDuration = 0.0f;
+
+    UPROPERTY()
+    bool bIsItemBuff = false;
+};
+
 class AMyCharacter;
 class AMySword;
 class UAnimMontage;
@@ -80,6 +98,7 @@ protected:
 
     // StartWeaponTrace() 호출 시 한 번만 조회 — WeaponTraceTick() 매 프레임 FindRow() 방지
     FAttackData* CachedAttackData = nullptr;
+
 
 
 
@@ -309,6 +328,14 @@ public:
 
     // bFromItem = true 이면 아이템 버프 경로, false 이면 스킬 버프 경로로 처리합니다.
     void ApplyAttackBuff(float Amount, float Duration, FName BuffID, bool bFromItem = false);
+
+    // 서버에서 버프가 추가·제거될 때마다 클라이언트로 복제되는 활성 버프 목록입니다.
+    // 어떤 버프 종류든 이 배열에 추가하면 자동으로 클라이언트 위젯에 반영됩니다.
+    UPROPERTY(ReplicatedUsing=OnRep_ActiveBuffs)
+    TArray<FActiveBuffInfo> ActiveBuffs;
+
+    UFUNCTION()
+    void OnRep_ActiveBuffs();
 
     // 지정 위치에 히트 이펙트를 스폰합니다. (서버에서 클라이언트 히트 보고를 받았을 때 호출)
     void SpawnHitEffectAt(FVector HitLocation, FRotator HitNormal);

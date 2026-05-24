@@ -49,6 +49,35 @@ void UCombatComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
     DOREPLIFETIME(UCombatComponent, CurrentMP);
     DOREPLIFETIME(UCombatComponent, CurrentSP);
     DOREPLIFETIME(UCombatComponent, BaseAttackPower);
+    DOREPLIFETIME(UCombatComponent, ActiveBuffs);
+}
+
+// ActiveBuffs 복제 수신 시 호출 — 클라이언트 측 버프 플래그와 ID를 동기화하고 위젯을 갱신합니다.
+void UCombatComponent::OnRep_ActiveBuffs()
+{
+    bIsAttackBuffActive     = false;
+    bIsItemAttackBuffActive = false;
+    ActiveAttackBuffID      = NAME_None;
+    ActiveItemAttackBuffID  = NAME_None;
+
+    for (const FActiveBuffInfo& Buff : ActiveBuffs)
+    {
+        if (Buff.bIsItemBuff)
+        {
+            bIsItemAttackBuffActive = true;
+            ActiveItemAttackBuffID  = Buff.BuffID;
+        }
+        else
+        {
+            bIsAttackBuffActive = true;
+            ActiveAttackBuffID  = Buff.BuffID;
+        }
+    }
+
+    if (OnCombatBuffUpdated.IsBound())
+    {
+        OnCombatBuffUpdated.Broadcast();
+    }
 }
 
 // CurrentHP/MP/SP 복제 수신 시 호출 — 소유 클라이언트의 HUD를 갱신합니다.
@@ -120,6 +149,12 @@ void UCombatComponent::BeginPlay()
             }
         }
     }
+
+    UE_LOG(LogTemp, Warning, TEXT("[LV_TRAVEL] CombatComp BeginPlay | Auth:%s | HP:%.0f/%.0f | MP:%.0f/%.0f | SP:%.0f/%.0f | AtkPow:%.1f | SkillBuff:%s | ItemBuff:%s"),
+        (GetOwner() && GetOwner()->HasAuthority()) ? TEXT("SERVER") : TEXT("CLIENT"),
+        CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP, BaseAttackPower,
+        bIsAttackBuffActive     ? TEXT("ON") : TEXT("OFF"),
+        bIsItemAttackBuffActive ? TEXT("ON") : TEXT("OFF"));
 
     // 레벨 이동 전에 저장해둔 버프 아이템 상태를 복원합니다.
     USkillSubsystem* SkillSys = GI->GetSubsystem<USkillSubsystem>();
@@ -864,6 +899,13 @@ void UCombatComponent::ApplyAttackBuff(float Amount, float Duration, FName BuffI
         GetWorld()->GetTimerManager().SetTimer(AttackBuffTimerHandle, this, &UCombatComponent::RemoveAttackBuff, Duration, false);
     }
 
+    FActiveBuffInfo NewBuff;
+    NewBuff.BuffID      = BuffID;
+    NewBuff.Amount      = Amount;
+    NewBuff.MaxDuration = Duration;
+    NewBuff.bIsItemBuff = bFromItem;
+    ActiveBuffs.Add(NewBuff);
+
     if (OnCombatBuffUpdated.IsBound())
     {
         OnCombatBuffUpdated.Broadcast();
@@ -876,7 +918,13 @@ void UCombatComponent::RemoveAttackBuff()
     bIsAttackBuffActive    = false;
     IncreaseAttackPower(-ActiveAttackBuffAmount);
     ActiveAttackBuffAmount = 0.0f;
-    ActiveAttackBuffID     = NAME_None;
+
+    ActiveBuffs.RemoveAll([this](const FActiveBuffInfo& Buff)
+    {
+        return !Buff.bIsItemBuff && Buff.BuffID == ActiveAttackBuffID;
+    });
+
+    ActiveAttackBuffID = NAME_None;
 
     if (OnCombatBuffUpdated.IsBound())
     {
@@ -890,7 +938,13 @@ void UCombatComponent::RemoveItemAttackBuff()
     bIsItemAttackBuffActive    = false;
     IncreaseAttackPower(-ActiveItemAttackBuffAmount);
     ActiveItemAttackBuffAmount = 0.0f;
-    ActiveItemAttackBuffID     = NAME_None;
+
+    ActiveBuffs.RemoveAll([this](const FActiveBuffInfo& Buff)
+    {
+        return Buff.bIsItemBuff && Buff.BuffID == ActiveItemAttackBuffID;
+    });
+
+    ActiveItemAttackBuffID = NAME_None;
 
     if (OnCombatBuffUpdated.IsBound())
     {

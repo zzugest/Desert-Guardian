@@ -328,6 +328,13 @@ void AMyCharacter::Attack(const FInputActionValue& Value)
     ServerRequestAttack(SnapRotation);
 }
 
+// 서버에서 실행: 캐릭터를 지정 위치·회전으로 텔레포트합니다.
+void AMyCharacter::Server_TeleportTo_Implementation(FVector DestLocation, FRotator DestRotation)
+{
+    SetActorLocationAndRotation(DestLocation, DestRotation,
+        false, nullptr, ETeleportType::TeleportPhysics);
+}
+
 // 서버에서 실행: 기존 Attack() 로직을 서버에서 처리한 뒤 클라이언트에 애님을 동기화합니다.
 void AMyCharacter::ServerRequestAttack_Implementation(FRotator SnapRotation)
 {

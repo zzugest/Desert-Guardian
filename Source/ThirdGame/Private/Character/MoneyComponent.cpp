@@ -17,6 +17,15 @@ UMoneyComponent::UMoneyComponent()
 	SetIsReplicated(true);
 }
 
+void UMoneyComponent::BeginPlay()
+{
+	Super::BeginPlay();
+
+	UE_LOG(LogTemp, Warning, TEXT("[LV_TRAVEL] MoneyComp BeginPlay | Auth:%s | Gold:%d"),
+		(GetOwner() && GetOwner()->HasAuthority()) ? TEXT("SERVER") : TEXT("CLIENT"),
+		CurrentGold);
+}
+
 // 복제할 변수를 등록합니다. COND_OwnerOnly로 소유 클라이언트에만 전송해 대역폭을 절약합니다.
 void UMoneyComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {

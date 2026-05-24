@@ -43,26 +43,15 @@ void UANS_NormalEnemy_BaseAttackTrace::NotifyTick(USkeletalMeshComponent* MeshCo
 	// 데미지 판정은 서버에서만 수행합니다.
 	if (!Enemy->HasAuthority()) return;
 
-	// 트레이스 기준 컴포넌트를 결정합니다 (스태틱 무기 → 스켈레탈 무기 → 기본 메시 순).
+	// 트레이스 기준 컴포넌트를 결정합니다.
+	// 스태틱 WeaponMesh가 있으면 사용(일반 몬스터), 없으면 메인 스켈레탈 메시 사용(정예 몬스터).
+	// 정예 몬스터는 무기가 메인 스켈레톤에 통합되어 있으며,
+	// 소켓 이름은 각 공격 애니메이션의 ANS에 몬스터별로 개별 지정됩니다.
 	USceneComponent* TargetComp = MeshComp;
 
 	if (Enemy->WeaponMesh && Enemy->WeaponMesh->GetStaticMesh() != nullptr)
 	{
 		TargetComp = Enemy->WeaponMesh;
-	}
-	else
-	{
-		TArray<USkeletalMeshComponent*> SkeletalMeshes;
-		Enemy->GetComponents<USkeletalMeshComponent>(SkeletalMeshes);
-
-		for (USkeletalMeshComponent* SkMesh : SkeletalMeshes)
-		{
-			if (SkMesh != MeshComp && SkMesh->GetName().Contains(TEXT("Weapon")))
-			{
-				TargetComp = SkMesh;
-				break;
-			}
-		}
 	}
 
 	// StartSocketName, EndSocketName은 AnimNotify 에디터에서 설정한 소켓 이름입니다.

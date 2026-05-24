@@ -113,21 +113,40 @@ void AMapPortal::InteractWithPortal(AMyCharacter* PlayerCharacter)
     // ── 같은 레벨 내 텔레포트 ──────────────────────────────────────────
     if (PortalData->PortalType == EPortalType::SameLevelTeleport)
     {
-        if (PortalData->TargetActorTag.IsNone()) return;
+        UE_LOG(LogTemp, Warning, TEXT("[PORTAL] SameLevelTeleport 시작 | TargetActorTag: %s"), *PortalData->TargetActorTag.ToString());
+
+        if (PortalData->TargetActorTag.IsNone())
+        {
+            UE_LOG(LogTemp, Error, TEXT("[PORTAL] 실패: TargetActorTag가 비어 있습니다. 데이터 테이블을 확인하세요."));
+            return;
+        }
 
         // 지정 태그를 가진 액터(TargetPoint 등)를 검색해 해당 위치로 즉시 이동합니다.
         TArray<AActor*> FoundActors;
         UGameplayStatics::GetAllActorsWithTag(GetWorld(), PortalData->TargetActorTag, FoundActors);
-        if (FoundActors.Num() == 0) return;
+
+        UE_LOG(LogTemp, Warning, TEXT("[PORTAL] 태그 '%s' 검색 결과: %d개 액터 발견"), *PortalData->TargetActorTag.ToString(), FoundActors.Num());
+
+        if (FoundActors.Num() == 0)
+        {
+            UE_LOG(LogTemp, Error, TEXT("[PORTAL] 실패: 태그 '%s'를 가진 액터를 찾지 못했습니다. PlayerStart에 태그가 정확히 설정됐는지 확인하세요."), *PortalData->TargetActorTag.ToString());
+            return;
+        }
 
         FVector  DestLocation = FoundActors[0]->GetActorLocation();
         FRotator DestRotation = FoundActors[0]->GetActorRotation();
-        PlayerCharacter->SetActorLocationAndRotation(DestLocation, DestRotation,
-            false, nullptr, ETeleportType::TeleportPhysics);
+
+        UE_LOG(LogTemp, Warning, TEXT("[PORTAL] 텔레포트 실행 | 목적지: %s | 회전: %s"), *DestLocation.ToString(), *DestRotation.ToString());
+
+        PlayerCharacter->Server_TeleportTo(DestLocation, DestRotation);
+
+        UE_LOG(LogTemp, Warning, TEXT("[PORTAL] 텔레포트 완료"));
 
         InteractPromptWidget->SetVisibility(false);
         return;
     }
+
+    UE_LOG(LogTemp, Warning, TEXT("[PORTAL] PortalType이 SameLevelTeleport가 아닙니다. 현재 타입: %d | 데이터 테이블의 PortalType을 확인하세요."), (int32)PortalData->PortalType);
 
     // ── 레벨 전환: 확인창을 띄우고 플레이어 입력을 잠급니다 ─────────────
     if (!ConfirmWidgetClass) return;

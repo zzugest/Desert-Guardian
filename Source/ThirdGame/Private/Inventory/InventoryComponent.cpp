@@ -45,6 +45,15 @@ void UInventoryComponent::BeginPlay()
 			Content.SetNum(Capacity);
 		}
 	}
+
+	int32 ValidItems = 0;
+	for (const FItemData& Item : Content)
+	{
+		if (Item.ItemIcon != nullptr) ValidItems++;
+	}
+	UE_LOG(LogTemp, Warning, TEXT("[LV_TRAVEL] InventoryComp BeginPlay | Auth:%s | ValidItems:%d / Capacity:%d"),
+		(GetOwner() && GetOwner()->HasAuthority()) ? TEXT("SERVER") : TEXT("CLIENT"),
+		ValidItems, Capacity);
 }
 
 // InventorySubsystem 레퍼런스를 반환하는 내부 헬퍼 함수입니다.

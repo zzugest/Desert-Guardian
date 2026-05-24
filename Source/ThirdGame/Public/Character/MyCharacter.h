@@ -159,6 +159,10 @@ public:
 	// [네트워크] 공격 동기화 RPC
 	// ============================================================
 
+	// 클라이언트 → 서버: 포탈 텔레포트 요청. 서버 권위로 캐릭터를 목적지로 이동시킵니다.
+	UFUNCTION(Server, Reliable)
+	void Server_TeleportTo(FVector DestLocation, FRotator DestRotation);
+
 	// 클라이언트 → 서버: 공격 요청. SnapRotation은 공격 시작 시 캐릭터가 바라볼 방향입니다.
 	UFUNCTION(Server, Reliable)
 	void ServerRequestAttack(FRotator SnapRotation);

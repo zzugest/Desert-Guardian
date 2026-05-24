@@ -93,29 +93,27 @@ void UBuffListWidget::UpdateBuffList()
     }
 
     // ========================================================
-    // 2. 아이템 버프 표시 (bIsItemAttackBuffActive 전용 경로)
-    // 스킬 버프와 독립된 플래그를 사용하므로 중첩 표시가 가능합니다.
+    // 2. 아이템 버프 표시 (CombatComponent::ActiveBuffs 순회)
+    // 복제된 배열을 직접 읽으므로 서버·클라이언트 모두 동일하게 표시됩니다.
     // ========================================================
-    if (CachedCombatComp && CachedCombatComp->bIsItemAttackBuffActive
-        && !CachedCombatComp->ActiveItemAttackBuffID.IsNone())
+    if (CachedCombatComp && ItemDataTable)
     {
-        float TimeLeft = GetWorld()->GetTimerManager().GetTimerRemaining(CachedCombatComp->ItemAttackBuffTimerHandle);
-
-        if (TimeLeft > 0.0f && ItemDataTable)
+        for (const FActiveBuffInfo& Buff : CachedCombatComp->ActiveBuffs)
         {
-            FItemData* FoundItemData = ItemDataTable->FindRow<FItemData>(
-                CachedCombatComp->ActiveItemAttackBuffID, TEXT("ItemBuffContext"));
+            if (!Buff.bIsItemBuff) continue;
 
-            if (FoundItemData)
-            {
-                UBuffIconWidget* PotionWidget = CreateWidget<UBuffIconWidget>(GetWorld(), BuffIconClass);
-                if (PotionWidget)
-                {
-                    float MaxTime = GetWorld()->GetTimerManager().GetTimerRate(CachedCombatComp->ItemAttackBuffTimerHandle);
-                    PotionWidget->InitBuff(FoundItemData->ItemIcon, MaxTime, TimeLeft);
-                    BuffBox->AddChildToHorizontalBox(PotionWidget);
-                }
-            }
+            FItemData* FoundItemData = ItemDataTable->FindRow<FItemData>(Buff.BuffID, TEXT("ItemBuffContext"));
+            if (!FoundItemData) continue;
+
+            UBuffIconWidget* PotionWidget = CreateWidget<UBuffIconWidget>(GetWorld(), BuffIconClass);
+            if (!PotionWidget) continue;
+
+            // 서버는 타이머에서 남은 시간을 읽고, 클라이언트는 MaxDuration을 대신 사용합니다.
+            float TimeLeft = GetWorld()->GetTimerManager().GetTimerRemaining(CachedCombatComp->ItemAttackBuffTimerHandle);
+            if (TimeLeft <= 0.0f) TimeLeft = Buff.MaxDuration;
+
+            PotionWidget->InitBuff(FoundItemData->ItemIcon, Buff.MaxDuration, TimeLeft);
+            BuffBox->AddChildToHorizontalBox(PotionWidget);
         }
     }
 }
