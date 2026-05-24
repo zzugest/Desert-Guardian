@@ -8,27 +8,24 @@
 
 #include "MoneyComponent.h"
 #include "MoneySubsystem.h"
+#include "Net/UnrealNetwork.h"
 
 // 단순 저장 컴포넌트이므로 Tick은 비활성화합니다.
 UMoneyComponent::UMoneyComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
+	SetIsReplicated(true);
 }
 
-// 현재 잔액에서 Cost만큼 차감할 수 있으면 MoneySubsystem에 차감을 요청하고 true를 반환합니다.
-bool UMoneyComponent::TryBuyItem(int32 Cost)
+// 복제할 변수를 등록합니다. COND_OwnerOnly로 소유 클라이언트에만 전송해 대역폭을 절약합니다.
+void UMoneyComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
-	UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
-	if (!GI) return false;
-
-	UMoneySubsystem* MoneySys = GI->GetSubsystem<UMoneySubsystem>();
-	if (!MoneySys) return false;
-
-	return MoneySys->PayGold(Cost);
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME_CONDITION(UMoneyComponent, CurrentGold, COND_OwnerOnly);
 }
 
-// MoneySubsystem에 골드 추가를 요청합니다. (적 처치 보상 등에서 호출)
-void UMoneyComponent::AddMoney(int32 Amount)
+// Content 복제 수신 시 호출 — MoneySubsystem에 동기화하고 UI 갱신 델리게이트를 브로드캐스트합니다.
+void UMoneyComponent::OnRep_Gold()
 {
 	UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
 	if (!GI) return;
@@ -36,17 +33,62 @@ void UMoneyComponent::AddMoney(int32 Amount)
 	UMoneySubsystem* MoneySys = GI->GetSubsystem<UMoneySubsystem>();
 	if (!MoneySys) return;
 
-	MoneySys->AddGold(Amount);
+	MoneySys->SetGold(CurrentGold);
+
+	UE_LOG(LogTemp, Log, TEXT("[MONEY_SYNC][CLIENT][%s] OnRep received -> MoneySubsystem synced (gold: %d)"),
+		*GetOwner()->GetName(), CurrentGold);
 }
 
-// UI 표시 등을 위해 MoneySubsystem에서 현재 골드 잔액을 조회해 반환합니다.
+// 클라이언트 UX용 사전 검사입니다. 실제 차감은 서버(PayGoldInternal)에서 처리합니다.
+bool UMoneyComponent::TryBuyItem(int32 Cost)
+{
+	return CurrentGold >= Cost;
+}
+
+// 서버에서만 호출합니다. 골드를 추가하고 복제를 트리거합니다.
+void UMoneyComponent::AddGoldInternal(int32 Amount)
+{
+	if (Amount <= 0) return;
+
+	int32 Before = CurrentGold;
+	CurrentGold += Amount;
+
+	UE_LOG(LogTemp, Log, TEXT("[MONEY_SYNC][SERVER][%s] AddGold: +%d | before: %d | after: %d"),
+		*GetOwner()->GetName(), Amount, Before, CurrentGold);
+}
+
+// 서버에서만 호출합니다. 잔액 검증 후 차감합니다. 성공 여부를 반환합니다.
+bool UMoneyComponent::PayGoldInternal(int32 Amount)
+{
+	if (Amount <= 0) return false;
+
+	if (CurrentGold < Amount)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[MONEY_SYNC][SERVER][%s] PayGold FAILED: cost %d | balance: %d (not enough)"),
+			*GetOwner()->GetName(), Amount, CurrentGold);
+		return false;
+	}
+
+	int32 Before = CurrentGold;
+	CurrentGold -= Amount;
+
+	UE_LOG(LogTemp, Log, TEXT("[MONEY_SYNC][SERVER][%s] PayGold: -%d | before: %d | after: %d"),
+		*GetOwner()->GetName(), Amount, Before, CurrentGold);
+
+	return true;
+}
+
+// MoneySubsystem에 골드 추가를 요청합니다. (적 처치 보상 등에서 호출)
+void UMoneyComponent::AddMoney(int32 Amount)
+{
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		AddGoldInternal(Amount);
+	}
+}
+
+// UI 표시 등을 위해 현재 골드 잔액을 반환합니다.
 int32 UMoneyComponent::GetCurrentMoney() const
 {
-	UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
-	if (!GI) return 0;
-
-	UMoneySubsystem* MoneySys = GI->GetSubsystem<UMoneySubsystem>();
-	if (!MoneySys) return 0;
-
-	return MoneySys->GetGold();
+	return CurrentGold;
 }

@@ -88,6 +88,9 @@ public:
     // ���� �÷��̾ ������ ���� ���� ���� ���� �ִ����� ��Ÿ���� �ܺ� Ȯ�ο� �÷����Դϴ�.
     bool bIsPlayerInZone = false;
 
+    // 구역 안에 있는 플레이어 목록입니다. IsNetRelevantFor에서 복제 대상 판단에 사용합니다.
+    TArray<class AMyCharacter*> PlayersInZone;
+
     // 몬스터별 개별 리스폰 타이머 핸들 맵
     // 단일 FTimerHandle을 쓰면 SetTimer 호출마다 이전 타이머가 덮어써져 마지막 1마리만 재스폰됩니다.
     // TMap으로 몬스터마다 독립된 핸들을 유지합니다.

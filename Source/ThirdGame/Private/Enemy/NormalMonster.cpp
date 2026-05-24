@@ -21,25 +21,10 @@ ANormalMonster::ANormalMonster()
 	// AEnemy::Tick이 HP바 카메라 방향 빌보딩을 처리하므로 Tick이 필요합니다.
 }
 
-// 스폰 시 블루프린트 컴포넌트에서 이름이 "Weapon"인 스태틱 메시를 찾아 캐싱합니다.
+// WeaponMesh 탐색은 Enemy::BeginPlay로 이동해 모든 서브클래스에서 공통 처리합니다.
 void ANormalMonster::BeginPlay()
 {
 	Super::BeginPlay();
-
-	TArray<UStaticMeshComponent*> StaticMeshes;
-	GetComponents<UStaticMeshComponent>(StaticMeshes);
-
-	// C++이 아닌 블루프린트에서 붙은 컴포넌트이므로 이름으로 무기 메시를 식별합니다.
-	for (UStaticMeshComponent* MeshComp : StaticMeshes)
-	{
-		if (!MeshComp) continue;
-
-		if (MeshComp->GetName().Contains(TEXT("Weapon")))
-		{
-			WeaponMesh = MeshComp;
-			break;
-		}
-	}
 }
 
 // 현재 미사용. 실제 데미지 처리는 ANS_NormalEnemy_BaseAttackTrace가 담당합니다.

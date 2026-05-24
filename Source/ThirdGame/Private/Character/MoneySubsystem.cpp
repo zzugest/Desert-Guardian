@@ -43,3 +43,14 @@ int32 UMoneySubsystem::GetGold() const
 {
 	return CurrentGold;
 }
+
+// OnRep_Gold 수신 시 MoneyComponent의 복제 값으로 CurrentGold를 덮어쓰고 UI에 알립니다.
+void UMoneySubsystem::SetGold(int32 NewGold)
+{
+	CurrentGold = NewGold;
+
+	if (OnGoldChanged.IsBound())
+	{
+		OnGoldChanged.Broadcast(CurrentGold);
+	}
+}

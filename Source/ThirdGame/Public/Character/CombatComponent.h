@@ -115,7 +115,8 @@ public:
     float ManaRegenRate = 5.0f;
 
     // ������ ���� �� ������ �Ǵ� �⺻ ���ݷ�
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Status")
+    // 버프 적용 시 서버에서 변경되며, 클라이언트 데미지 텍스트 동기화를 위해 복제합니다.
+    UPROPERTY(Replicated, EditAnywhere, BlueprintReadWrite, Category = "Status")
     float BaseAttackPower = 10.0f;
 
     // �����Ͽ� ĳ���Ϳ� ����� ���� Ŭ����

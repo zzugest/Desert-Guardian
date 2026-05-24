@@ -36,6 +36,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Money")
 	int32 GetGold() const;
 
+	// OnRep_Gold에서 복제 수신 시 MoneySubsystem을 서버 값으로 덮어씁니다.
+	void SetGold(int32 NewGold);
+
 private:
 	// 외부 해킹이나 잘못된 참조로 값이 조작되는 것을 막기 위한 보호된 실제 잔고 데이터입니다.
 	UPROPERTY()

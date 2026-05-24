@@ -20,6 +20,7 @@
 
 #include "MonsterSpawner.h"
 #include "Enemy.h"
+#include "MyCharacter.h"
 #include "Kismet/GameplayStatics.h"
 #include "Components/SphereComponent.h"
 #include "GameFramework/Character.h"
@@ -48,6 +49,8 @@ AMonsterSpawner::AMonsterSpawner()
 void AMonsterSpawner::BeginPlay()
 {
     Super::BeginPlay();
+
+    if (!HasAuthority()) return;
 
     if (DetectionSphere)
     {
@@ -131,9 +134,16 @@ void AMonsterSpawner::BeginPlay()
 // MonsterPool에는 활성 몬스터만 있으므로 리스폰 대기 중인 몬스터는 노출되지 않습니다.
 void AMonsterSpawner::OnSensorOverlapBegin(UPrimitiveComponent* OverlappedComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
 {
-    if (OtherActor != UGameplayStatics::GetPlayerCharacter(GetWorld(), 0)) return;
+    if (!HasAuthority()) return;
 
+    AMyCharacter* PlayerChar = Cast<AMyCharacter>(OtherActor);
+    if (!PlayerChar) return;
+
+    PlayersInZone.AddUnique(PlayerChar);
     bIsPlayerInZone = true;
+
+    // 첫 번째 플레이어가 진입할 때만 몬스터를 활성화합니다.
+    if (PlayersInZone.Num() > 1) return;
 
     for (AEnemy* Monster : MonsterPool)
     {
@@ -159,9 +169,16 @@ void AMonsterSpawner::OnSensorOverlapBegin(UPrimitiveComponent* OverlappedComp, 
 // 플레이어가 구역을 벗어나면 살아있는 몬스터들을 비활성(슬립) 상태로 전환합니다.
 void AMonsterSpawner::OnSensorOverlapEnd(UPrimitiveComponent* OverlappedComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex)
 {
-    if (OtherActor != UGameplayStatics::GetPlayerCharacter(GetWorld(), 0)) return;
+    if (!HasAuthority()) return;
 
-    bIsPlayerInZone = false;
+    AMyCharacter* PlayerChar = Cast<AMyCharacter>(OtherActor);
+    if (!PlayerChar) return;
+
+    PlayersInZone.Remove(PlayerChar);
+    bIsPlayerInZone = PlayersInZone.Num() > 0;
+
+    // 아직 구역 안에 다른 플레이어가 있으면 비활성화하지 않습니다.
+    if (PlayersInZone.Num() > 0) return;
 
     for (AEnemy* Monster : MonsterPool)
     {
@@ -211,6 +228,8 @@ void AMonsterSpawner::OnSensorOverlapEnd(UPrimitiveComponent* OverlappedComp, AA
 // 몬스터가 사망하면 MonsterPool에서 제거하고 개별 리스폰 타이머를 예약합니다.
 void AMonsterSpawner::HandleMonsterDeath(AEnemy* DeadMonster)
 {
+    if (!HasAuthority()) return;
+
     if (!DeadMonster) return;
 
     // 죽은 몬스터를 풀·미니맵에서 제거하고 델리게이트를 해제합니다.
@@ -261,6 +280,8 @@ void AMonsterSpawner::HandleMonsterDeath(AEnemy* DeadMonster)
 // 타이머 만료 후 몬스터를 Revive하고 MonsterPool에 정식으로 추가합니다.
 void AMonsterSpawner::RespawnMonster(AEnemy* MonsterToRespawn)
 {
+    if (!HasAuthority()) return;
+
     if (!MonsterToRespawn) return;
 
     // 사용 완료된 타이머 핸들을 맵에서 제거합니다.

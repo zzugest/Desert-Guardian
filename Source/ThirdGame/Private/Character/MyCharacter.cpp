@@ -53,6 +53,8 @@
 #include "Blueprint/UserWidget.h"
 #include "GameplayTagsManager.h"
 #include "Skill/SkillWindowWidget.h"
+#include "Skill/SkillSubsystem.h"
+#include "Skill/SkillData.h"
 #include "NPC/Quest/QuestComponent.h"
 #include "TargetingComponent.h"
 #include "UndodgeableDamageType.h"
@@ -72,6 +74,9 @@ void AMyCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 AMyCharacter::AMyCharacter()
 {
     PrimaryActorTick.bCanEverTick = true;
+
+    // 8000 유닛(80m) 밖의 다른 플레이어는 복제하지 않아 렌더링과 네트워크 대역폭을 절약합니다.
+    NetCullDistanceSquared = 8000.0f * 8000.0f;
 
     // 카메라가 마우스를 따라가도 캐릭터 본체는 컨트롤러 회전을 그대로 따르지 않도록 분리
     bUseControllerRotationPitch = false;
@@ -745,6 +750,9 @@ void AMyCharacter::Landed(const FHitResult& Hit)
 // 피격 시 구르기 무적 여부를 판단하고, 실제 피해를 CombatComponent에 전달해 HP를 감소시킵니다.
 float AMyCharacter::TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser)
 {
+    UE_LOG(LogTemp, Warning, TEXT("[DMG_DBG] TakeDamage | Actor: %s | Amount: %.1f | Auth: %s"),
+        *GetName(), DamageAmount, HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"));
+
     float ActualDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 
     // 피해 타입이 '회피 불가(UndodgeableDamageType)'인지 확인
@@ -1052,10 +1060,19 @@ void AMyCharacter::ServerPickItem_Implementation(APickableItem* Item)
     Item->Destroy();
 }
 
-// 서버에서 실행: 상점 구매 아이템을 인벤토리에 추가합니다.
+// 서버에서 실행: 골드 잔액을 검증·차감하고 성공 시 인벤토리에 아이템을 추가합니다.
 void AMyCharacter::ServerBuyItem_Implementation(FItemData Item)
 {
-    if (!InventoryComp) return;
+    if (!InventoryComp || !MoneyComp) return;
+
+    // 서버에서 골드 잔액을 검증하고 차감합니다. 잔액 부족 시 구매를 거부합니다.
+    if (!MoneyComp->PayGoldInternal(Item.ItemPrice))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[MONEY_SYNC][SERVER][%s] ServerBuyItem rejected: insufficient gold for %s (cost: %d)"),
+            *GetName(), *Item.ItemName, Item.ItemPrice);
+        return;
+    }
+
     InventoryComp->AddItemInternal(Item);
 }
 
@@ -1064,4 +1081,63 @@ void AMyCharacter::ServerClaimQuestReward_Implementation(FItemData Item)
 {
     if (!InventoryComp) return;
     InventoryComp->AddItemInternal(Item);
+}
+
+// 서버에서 실행: MP 차감을 검증하고 스킬 애니메이션을 재생합니다.
+// 투사체 생성은 서버에서 재생된 애니메이션의 AnimNotify_FireProjectile이 처리합니다.
+void AMyCharacter::ServerCastSkill_Implementation(FName SkillID)
+{
+    if (!CombatComp || !SkillComp) return;
+
+    UGameInstance* GI = GetGameInstance();
+    if (!GI) return;
+
+    USkillSubsystem* SkillSys = GI->GetSubsystem<USkillSubsystem>();
+    if (!SkillSys) return;
+
+    FSkillData* Data = SkillSys->GetSkillData(SkillID);
+    if (!Data) { UE_LOG(LogTemp, Warning, TEXT("[SKILL_DBG][1] %s -> SkillData NOT FOUND for ID: %s"), *GetName(), *SkillID.ToString()); return; }
+
+    UE_LOG(LogTemp, Warning, TEXT("[SKILL_DBG][1] %s -> ServerCastSkill called | SkillID: %s | Montage: %s"),
+        *GetName(), *SkillID.ToString(), Data->SkillMontage ? *Data->SkillMontage->GetName() : TEXT("NULL"));
+
+    // 서버에서 MP 잔액 검증 후 차감합니다.
+    if (CombatComp->CurrentMP < Data->ManaCost) { UE_LOG(LogTemp, Warning, TEXT("[SKILL_DBG][1] %s -> MP insufficient"), *GetName()); return; }
+    CombatComp->CurrentMP -= Data->ManaCost;
+
+    // 서버에서 애니메이션을 재생합니다. AnimNotify_FireProjectile이 서버에서 발동해 투사체를 생성합니다.
+    if (Data->SkillMontage)
+    {
+        float PlayResult = PlayAnimMontage(Data->SkillMontage);
+        UE_LOG(LogTemp, Warning, TEXT("[SKILL_DBG][1] %s -> PlayAnimMontage result: %f (0 = failed)"), *GetName(), PlayResult);
+        // 모든 클라이언트 화면에 스킬 애니메이션을 동기화합니다.
+        MulticastPlaySkillMontage(Data->SkillMontage);
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[SKILL_DBG][1] %s -> SkillMontage is NULL, skipping"), *GetName());
+    }
+
+    // 버프 스킬은 서버에서 직접 스탯에 적용합니다.
+    if (Data->SkillType == ESkillType::Buff && Data->BuffAmount > 0.0f)
+    {
+        CombatComp->ApplyAttackBuff(Data->BuffAmount, Data->Duration, SkillID);
+    }
+}
+
+// 서버 → 시전자 클라이언트: 스킬 피격 데미지 텍스트를 시전자 화면에만 표시합니다.
+void AMyCharacter::ClientShowDamageText_Implementation(FVector Location, float Damage)
+{
+    OnSpawnDamageText(Location, Damage);
+}
+
+// 서버 → 모든 클라이언트: 스킬 몽타주를 재생합니다.
+// 시전자 본인은 TryCastSkill에서 이미 로컬 재생했으므로 건너뜁니다.
+void AMyCharacter::MulticastPlaySkillMontage_Implementation(UAnimMontage* Montage)
+{
+    if (IsLocallyControlled()) return;
+    if (Montage)
+    {
+        PlayAnimMontage(Montage);
+    }
 }

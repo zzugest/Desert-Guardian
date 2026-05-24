@@ -40,6 +40,9 @@ void UANS_NormalEnemy_BaseAttackTrace::NotifyTick(USkeletalMeshComponent* MeshCo
 	// 이미 이 공격으로 데미지를 줬으면 다시 주지 않습니다.
 	if (Enemy == nullptr || Enemy->bHasDamaged) return;
 
+	// 데미지 판정은 서버에서만 수행합니다.
+	if (!Enemy->HasAuthority()) return;
+
 	// 트레이스 기준 컴포넌트를 결정합니다 (스태틱 무기 → 스켈레탈 무기 → 기본 메시 순).
 	USceneComponent* TargetComp = MeshComp;
 
@@ -71,12 +74,17 @@ void UANS_NormalEnemy_BaseAttackTrace::NotifyTick(USkeletalMeshComponent* MeshCo
 
 	FHitResult HitResult;
 
+	UE_LOG(LogTemp, Warning, TEXT("[ANS_DBG] NotifyTick | Enemy: %s | Auth: %s | Start: %s | End: %s"),
+		*Enemy->GetName(),
+		Enemy->HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"),
+		*StartLocation.ToString(), *EndLocation.ToString());
+
 	// 플레이어 전용 채널(GameTraceChannel5)로 구체 트레이스를 수행합니다.
 	bool bHit = UKismetSystemLibrary::SphereTraceSingle(
 		MeshComp,
 		StartLocation, EndLocation, TraceRadius,
 		UEngineTypes::ConvertToTraceType(ECC_GameTraceChannel5), false, ActorsToIgnore,
-		EDrawDebugTrace::None, HitResult, true
+		EDrawDebugTrace::ForDuration, HitResult, true, FLinearColor::Blue, FLinearColor::Red, 0.3f
 	);
 
 	if (bHit)
@@ -84,9 +92,18 @@ void UANS_NormalEnemy_BaseAttackTrace::NotifyTick(USkeletalMeshComponent* MeshCo
 		APawn* HitPawn = Cast<APawn>(HitResult.GetActor());
 		if (HitPawn && HitPawn->IsPlayerControlled())
 		{
+			UE_LOG(LogTemp, Warning, TEXT("[ANS_DBG] HIT | Target: %s | Damage: %.1f | Auth: %s"),
+				*HitPawn->GetName(), StateDamage,
+				Enemy->HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"));
+
 			UGameplayStatics::ApplyDamage(HitPawn, StateDamage, Enemy->GetController(), Enemy, UDamageType::StaticClass());
 			Enemy->bHasDamaged = true;
 		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[ANS_DBG] MISS | Auth: %s"),
+			Enemy->HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"));
 	}
 }
 

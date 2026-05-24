@@ -154,7 +154,7 @@ void USkillComponent::TryCastSkill(int32 SlotIndex)
 	FSkillData* Data = SkillSys->GetSkillData(SkillID);
 	if (!Data) return;
 
-	// 5) ���� üũ �� ���� (CombatComp�� CurrentMP�� �ִٰ� ����)
+	// 5) MP 잔액 클라이언트 사전 검사 (UX용 — 실제 차감은 서버에서 처리)
 	if (CombatComp)
 	{
 		if (CombatComp->CurrentMP < Data->ManaCost)
@@ -170,16 +170,15 @@ void USkillComponent::TryCastSkill(int32 SlotIndex)
 			}
 			return;
 		}
-
-		CombatComp->CurrentMP -= Data->ManaCost;
 	}
 
-	// 6) �ִϸ��̼� ��� �� ��Ÿ�� ���
+	// 6) 클라이언트에서 애니메이션 로컬 재생 (시각적 피드백) 및 쿨다운 등록
+	AMyCharacter* MyChar = Cast<AMyCharacter>(GetOwner());
 	ACharacter* Character = Cast<ACharacter>(GetOwner());
 	if (Character && Data->SkillMontage)
 	{
 		// 스킬 시전 중 다른 행동을 막기 위해 MagicCasting 태그를 추가합니다.
-		if (AMyCharacter* MyChar = Cast<AMyCharacter>(Character))
+		if (MyChar)
 		{
 			MyChar->AddStateTag("State.Action.MagicCasting");
 		}
@@ -196,18 +195,10 @@ void USkillComponent::TryCastSkill(int32 SlotIndex)
 			AnimInst->Montage_SetEndDelegate(EndDelegate, Data->SkillMontage);
 		}
 
-		// 7) 버프 스킬이면 UI 등록 + 실제 스탯 적용 + VFX 재생
+		// 버프 스킬이면 UI 버프 아이콘만 로컬 등록합니다. 실제 스탯 적용은 서버에서 처리합니다.
 		if (Data->SkillType == ESkillType::Buff)
 		{
-			// UI용 버프 목록에 등록 (HUD 버프 아이콘/타이머 표시)
 			AddBuff(SkillID, Data->Duration);
-
-			// 실제 공격력 상승 적용 — 에디터 AnimNotify 없이 C++에서 직접 처리
-			// BuffAmount와 Duration은 DataTable(DT_SkillData)에서 관리합니다.
-			if (CombatComp && Data->BuffAmount > 0.0f)
-			{
-				CombatComp->ApplyAttackBuff(Data->BuffAmount, Data->Duration, SkillID);
-			}
 
 			if (Data->BuffEffect)
 			{
@@ -222,6 +213,12 @@ void USkillComponent::TryCastSkill(int32 SlotIndex)
 				);
 			}
 		}
+	}
+
+	// 7) 실제 MP 차감과 투사체 생성·버프 스탯 적용은 서버 RPC로 위임합니다.
+	if (MyChar)
+	{
+		MyChar->ServerCastSkill(SkillID);
 	}
 }
 
@@ -319,12 +316,18 @@ void USkillComponent::SpawnProjectile(FName SkillID, FName SocketName)
 	if (!SkillSys) return;
 
 	FSkillData* Data = SkillSys->GetSkillData(SkillID);
+	UE_LOG(LogTemp, Warning, TEXT("[SKILL_DBG][3] SpawnProjectile called | SkillID: %s | DataFound: %s"),
+		*SkillID.ToString(), Data ? TEXT("YES") : TEXT("NO"));
+
 	if (Data && Data->SkillType == ESkillType::Attack && Data->ProjectileClass)
 	{
 		float CurrentBaseAtk = Owner->CombatComp->BaseAttackPower;
 		float FinalDamage = CurrentBaseAtk * Data->DamageMultiplier;
 
 		FVector SpawnLocation = Owner->GetMesh()->GetSocketLocation(SocketName);
+
+		UE_LOG(LogTemp, Warning, TEXT("[SKILL_DBG][3] Spawning projectile | Socket: %s | Location: %s | Damage: %f"),
+			*SocketName.ToString(), *SpawnLocation.ToString(), FinalDamage);
 
 		// 타겟이 있으면 타겟 방향으로, 없으면 캐릭터 정면으로 발사
 		FRotator SpawnRotation = Owner->GetActorRotation();
@@ -347,7 +350,19 @@ void USkillComponent::SpawnProjectile(FName SkillID, FName SocketName)
 		if (Projectile)
 		{
 			Projectile->BaseDamage = FinalDamage;
+			UE_LOG(LogTemp, Warning, TEXT("[SKILL_DBG][3] Projectile spawned successfully | BaseDamage: %f"), FinalDamage);
 		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[SKILL_DBG][3] SpawnActor FAILED or Cast failed | SpawnedActor: %s"),
+				SpawnedActor ? *SpawnedActor->GetName() : TEXT("NULL"));
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[SKILL_DBG][3] Condition not met | SkillType: %s | ProjectileClass: %s"),
+			Data ? (Data->SkillType == ESkillType::Attack ? TEXT("Attack") : TEXT("Other")) : TEXT("NoData"),
+			(Data && Data->ProjectileClass) ? TEXT("Valid") : TEXT("NULL"));
 	}
 }
 

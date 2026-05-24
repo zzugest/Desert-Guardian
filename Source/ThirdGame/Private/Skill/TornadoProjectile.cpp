@@ -45,6 +45,9 @@ void ATornadoProjectile::BeginPlay()
 
 void ATornadoProjectile::ApplyPeriodicDamage()
 {
+	// 클라이언트에서는 실행하지 않습니다. 데미지 판정은 서버에서만 처리합니다.
+	if (!HasAuthority()) return;
+
 	// ���: �浹 ������Ʈ�� ������ �ƹ� �͵� �� ��
 	if (!CollisionComp) return;
 
@@ -67,7 +70,8 @@ void ATornadoProjectile::ApplyPeriodicDamage()
 			AEnemy* HitEnemy = Cast<AEnemy>(Actor);
 			if (Caster && HitEnemy && !HitEnemy->bIsDead)
 			{
-				Caster->OnSpawnDamageText(Actor->GetActorLocation(), BaseDamage);
+				// 데미지 텍스트는 Client RPC로 시전자 본인 화면에만 표시합니다.
+				Caster->ClientShowDamageText(Actor->GetActorLocation(), BaseDamage);
 			}
 		}
 	}

@@ -13,6 +13,7 @@
 // =========================================================================================
 
 #include "Enemy.h"
+#include "Net/UnrealNetwork.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/WidgetComponent.h"
 #include "Engine/Engine.h"
@@ -43,6 +44,8 @@
 AEnemy::AEnemy()
 {
 	PrimaryActorTick.bCanEverTick = true;
+
+	bReplicates = true;
 
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
 	GetCapsuleComponent()->SetCollisionProfileName(TEXT("Pawn"));
@@ -145,6 +148,24 @@ void AEnemy::BeginPlay()
 	}
 
 	if (Data->AnimClass) GetMesh()->SetAnimInstanceClass(Data->AnimClass);
+
+	// 데디케이티드 서버는 렌더링이 없어 본 트랜스폼 계산을 생략하는데,
+	// 무기 소켓 위치 기반 공격 트레이스가 서버에서 정확히 동작하려면 항상 계산해야 합니다.
+	GetMesh()->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+
+	// 블루프린트에서 추가된 스태틱 메시 컴포넌트 중 이름에 "Weapon"이 포함된 것을 무기로 캐싱합니다.
+	// NormalMonster·EliteMonster 등 모든 서브클래스가 공통으로 사용합니다.
+	TArray<UStaticMeshComponent*> StaticMeshes;
+	GetComponents<UStaticMeshComponent>(StaticMeshes);
+	for (UStaticMeshComponent* SMComp : StaticMeshes)
+	{
+		if (!SMComp) continue;
+		if (SMComp->GetName().Contains(TEXT("Weapon")))
+		{
+			WeaponMesh = SMComp;
+			break;
+		}
+	}
 
 	// AI 퍼셉션 이벤트를 연결해 플레이어 감지·소실 시 블랙보드가 갱신되도록 합니다.
 	if (AIPerceptionComp)
@@ -318,10 +339,16 @@ void AEnemy::BaseAttack()
 	UAnimMontage* SelectedMontage = BaseAttackMontages[RandomIndex];
 	if (!SelectedMontage) return;
 
-	PlayAnimMontage(SelectedMontage);
+	MulticastPlayAttackMontage(SelectedMontage);
 
 	bCanAttack = false;
 	GetWorld()->GetTimerManager().SetTimer(AttackTimerHandle, this, &AEnemy::ResetAttack, AttackCooldown, false);
+}
+
+// 서버에서 선택한 공격 몽타주를 모든 클라이언트 화면에서 재생합니다.
+void AEnemy::MulticastPlayAttackMontage_Implementation(UAnimMontage* Montage)
+{
+	if (Montage) PlayAnimMontage(Montage);
 }
 
 // 공격 쿨다운이 끝나 다음 공격이 가능하도록 플래그를 복구합니다.
@@ -516,6 +543,76 @@ void AEnemy::CheckLeash()
 			}
 		}
 	}
+}
+
+// 이 몬스터를 특정 플레이어에게 복제할지 결정합니다.
+// 스포너 구역 안에 있는 플레이어에게만 복제하여 구역 밖 클라이언트에게는 보이지 않도록 합니다.
+bool AEnemy::IsNetRelevantFor(const AActor* RealViewer, const AActor* ViewTarget, const FVector& SrcLocation) const
+{
+	if (MySpawner)
+	{
+		const AMyCharacter* PlayerChar = Cast<AMyCharacter>(ViewTarget);
+		if (PlayerChar)
+		{
+			return MySpawner->PlayersInZone.Contains(const_cast<AMyCharacter*>(PlayerChar));
+		}
+	}
+
+	return Super::IsNetRelevantFor(RealViewer, ViewTarget, SrcLocation);
+}
+
+// 서버에서 변경된 CurrentHP와 bIsDead를 클라이언트에 복제합니다.
+void AEnemy::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(AEnemy, CurrentHP);
+	DOREPLIFETIME(AEnemy, bIsDead);
+	DOREPLIFETIME(AEnemy, EnemyDataTable);
+	DOREPLIFETIME(AEnemy, EnemyRowName);
+}
+
+// 클라이언트에서 CurrentHP가 갱신되면 HP 바 위젯을 업데이트합니다.
+void AEnemy::OnRep_CurrentHP()
+{
+	if (!HPBarWidget) return;
+
+	UEnemyHPBarWidget* EnemyWidget = Cast<UEnemyHPBarWidget>(HPBarWidget->GetUserWidgetObject());
+	if (EnemyWidget) EnemyWidget->UpdateHPWidget(CurrentHP, MaxHP);
+}
+
+// 클라이언트에서 bIsDead가 true로 변경되면 사망 처리를 수행합니다.
+void AEnemy::OnRep_bIsDead()
+{
+	if (!bIsDead) return;
+
+	bIsTargetable = false;
+
+	GetCharacterMovement()->SetMovementMode(MOVE_None);
+	StopAnimMontage();
+
+	// 클라이언트에는 AIController가 없으므로 null 체크 후 처리합니다.
+	AAIController* AICon = Cast<AAIController>(GetController());
+	if (AICon && AICon->GetBrainComponent())
+	{
+		AICon->GetBrainComponent()->StopLogic(TEXT("Dead"));
+	}
+
+	if (DeathMontage)
+	{
+		PlayAnimMontage(DeathMontage);
+	}
+}
+
+// EnemyDataTable 또는 EnemyRowName이 복제되면 클라이언트에서 AnimClass를 설정합니다.
+void AEnemy::OnRep_EnemySetup()
+{
+	if (!EnemyDataTable || EnemyRowName.IsNone()) return;
+
+	FEnemyData* Data = EnemyDataTable->FindRow<FEnemyData>(EnemyRowName, TEXT("OnRep_EnemySetup"));
+	if (!Data) return;
+
+	if (Data->AnimClass) GetMesh()->SetAnimInstanceClass(Data->AnimClass);
 }
 
 // 타겟팅 마커 메시와 이름 텍스트의 가시성을 동시에 전환합니다.

@@ -48,6 +48,7 @@ void UCombatComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
     DOREPLIFETIME(UCombatComponent, CurrentHP);
     DOREPLIFETIME(UCombatComponent, CurrentMP);
     DOREPLIFETIME(UCombatComponent, CurrentSP);
+    DOREPLIFETIME(UCombatComponent, BaseAttackPower);
 }
 
 // CurrentHP/MP/SP 복제 수신 시 호출 — 소유 클라이언트의 HUD를 갱신합니다.
@@ -769,7 +770,7 @@ void UCombatComponent::ApplyMagicDamage()
     float FinalDamage  = BaseAttackPower * Data->DamageMultiplier;
     float DamageRadius = 300.0f;
 
-    TArray<AActor*>     IgnoredActors;
+TArray<AActor*>     IgnoredActors;
     TArray<FHitResult>  HitResults;
     IgnoredActors.Add(Owner);
 

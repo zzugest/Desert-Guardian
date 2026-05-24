@@ -224,6 +224,18 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerClaimQuestReward(FItemData Item);
 
+	// 클라이언트 → 서버: 스킬 시전 요청. 서버에서 MP 차감 후 애니메이션을 재생하고 투사체를 생성합니다.
+	UFUNCTION(Server, Reliable)
+	void ServerCastSkill(FName SkillID);
+
+	// 서버 → 시전자 클라이언트: 스킬 피격 시 데미지 텍스트를 시전자 화면에만 표시합니다.
+	UFUNCTION(Client, Reliable)
+	void ClientShowDamageText(FVector Location, float Damage);
+
+	// 서버 → 모든 클라이언트: 스킬 몽타주를 재생합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlaySkillMontage(UAnimMontage* Montage);
+
 	// �Է� �̺�Ʈ�� �����Ͽ� ������ ��ȣ�ۿ��� �����մϴ�.
 	void Interact(const FInputActionValue& Value);
 

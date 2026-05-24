@@ -110,12 +110,24 @@ class THIRDGAME_API AEnemy : public ACharacter
 public:
 	AEnemy();
 
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	virtual bool IsNetRelevantFor(const AActor* RealViewer, const AActor* ViewTarget, const FVector& SrcLocation) const override;
+
+	UFUNCTION()
+	void OnRep_CurrentHP();
+
+	UFUNCTION()
+	void OnRep_bIsDead();
+
+	UFUNCTION()
+	void OnRep_EnemySetup();
+
 	// ���� ������ ���� �������� �Ǵ� ������ ��ü ������ �Ѱ�ġ�Դϴ�.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Status")
 	float MaxHP = 100.0f;
 
 	// �������� ���� �����Ǵ� ���� ������ ��ġ�Դϴ�.
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Status")
+	UPROPERTY(ReplicatedUsing=OnRep_CurrentHP, VisibleAnywhere, BlueprintReadOnly, Category = "Status")
 	float CurrentHP;
 
 	// ���� �浹 ���� �����κ��� �ǰ� �̺�Ʈ�� �����Ͽ� ��ü���� ������/��� ó���� �����մϴ�.
@@ -137,11 +149,11 @@ public:
 	void OnOverlapBegin(UPrimitiveComponent* OverlappedComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
 
 	// ���� ������ �Ҵ�� ���� ���� ���������̺��Դϴ�.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy Setup")
+	UPROPERTY(ReplicatedUsing=OnRep_EnemySetup, EditAnywhere, BlueprintReadWrite, Category = "Enemy Setup")
 	UDataTable* EnemyDataTable;
 
 	// ���������̺� ������ ���� ������ �����͸� Ư���ϱ� ���� ��(Row) �̸� ���Դϴ�.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Enemy Setup")
+	UPROPERTY(ReplicatedUsing=OnRep_EnemySetup, EditAnywhere, BlueprintReadWrite, Category = "Enemy Setup")
 	FName EnemyRowName;
 
 	// ������ ���Ŀ� Ȱ��Ǵ� �⺻ ���ȿ� ��ü�Դϴ�.
@@ -164,8 +176,12 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "Combat")
 	TArray<class UAnimMontage*> BaseAttackMontages;
 
-	// ������ ���� ����(���� ��)�� �����Ǿ��� �� �⺻ ��Ÿ�ָ� �����Ű�� ��ٿ��� �����մϴ�. 
+	// ������ ���� ����(���� ��)�� �����Ǿ��� �� �⺻ ��Ÿ�ָ� �����Ű�� ��ٿ��� �����մϴ�.
 	virtual void BaseAttack();
+
+	// 서버에서 선택한 공격 몽타주를 모든 클라이언트에 동기화해 재생합니다.
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastPlayAttackMontage(UAnimMontage* Montage);
 
 	// ���� ���Ͱ� ��Ÿ�Ӱ� �����ϰ� ������ �õ��� �� �ִ� �������� �Ǵ��ϴ� �÷����Դϴ�.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
@@ -234,6 +250,7 @@ public:
 	class UAnimMontage* DeathMontage;
 
 	// �̹� ����Ͽ� ��üȭ�� ��ü�� Ÿ���� ���� �� ���׼� �ߺ� ó���� �Ǵ� ���� ���� �����Դϴ�.
+	UPROPERTY(ReplicatedUsing=OnRep_bIsDead)
 	bool bIsDead = false;
 
 	// Ǯ��(Pooling) �������� �ڽ��� ȣ���ϰ� ȸ���ϴ� ���� ���� �������� ������ �������Դϴ�.
