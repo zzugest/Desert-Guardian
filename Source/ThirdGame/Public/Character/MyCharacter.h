@@ -163,6 +163,31 @@ public:
 	UFUNCTION(Server, Reliable)
 	void Server_TeleportTo(FVector DestLocation, FRotator DestRotation);
 
+	// 클라이언트 → 서버: 포탈 이동 요청. 서브레벨 로드 후 텔레포트하고 이전 서브레벨을 언로드합니다.
+	UFUNCTION(Server, Reliable)
+	void Server_RequestPortalTravel(FName TargetSubLevelName, FName UnloadSubLevelName, FVector Dest, FRotator Rot);
+
+	// 목적지 서브레벨 로드 완료 시 호출 — 텔레포트 실행 후 이전 서브레벨 언로드를 요청합니다.
+	UFUNCTION()
+	void OnPortalLevelLoaded();
+
+	// 이전 서브레벨 언로드 완료 시 호출 — 현재는 별도 처리 없음.
+	UFUNCTION()
+	void OnPortalUnloadComplete();
+
+	// 서버 → 해당 클라이언트 전용: 포탈 이동 후 이 클라이언트 로컬에서만 존 지오메트리를 로드/언로드합니다.
+	// 다른 클라이언트에는 영향을 주지 않아 각자의 화면에서 자신의 존만 렌더링됩니다.
+	UFUNCTION(Client, Reliable)
+	void Client_UpdateZoneStreaming(FName ToLoad, FName ToUnload);
+
+	// 클라이언트 로컬 존 로드 완료 콜백 — 현재는 별도 처리 없음.
+	UFUNCTION()
+	void OnClientZoneLoaded();
+
+	// 클라이언트 로컬 존 언로드 완료 콜백 — 현재는 별도 처리 없음.
+	UFUNCTION()
+	void OnClientZoneUnloaded();
+
 	// 클라이언트 → 서버: 공격 요청. SnapRotation은 공격 시작 시 캐릭터가 바라볼 방향입니다.
 	UFUNCTION(Server, Reliable)
 	void ServerRequestAttack(FRotator SnapRotation);
@@ -434,4 +459,16 @@ public:
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Combat|UI")
 	void OnSpawnDamageText(FVector HitLocation, float DamageAmount);
+
+	// 이 캐릭터가 현재 속한 서브레벨 이름입니다. 마을(Persistent Level)에 있으면 None입니다.
+	// 레퍼런스 카운팅에서 다른 플레이어의 존 위치를 확인할 때 사용합니다.
+	UPROPERTY()
+	FName CurrentZoneName = NAME_None;
+
+private:
+	// 포탈 이동 대기 정보: 서브레벨 로드 완료 후 텔레포트에 사용됩니다.
+	FVector  PendingTravelLocation     = FVector::ZeroVector;
+	FRotator PendingTravelRotation     = FRotator::ZeroRotator;
+	FName    PendingUnloadSubLevelName = NAME_None;
+	FName    PendingTargetSubLevelName = NAME_None;
 };

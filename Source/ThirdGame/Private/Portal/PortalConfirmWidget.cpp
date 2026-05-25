@@ -43,11 +43,9 @@ void UPortalConfirmWidget::InitConfirmUI(const FPortalData& PortalData)
     }
 }
 
-// 수락 버튼: 입력·마우스 상태를 게임 모드로 복구하고 목적지 레벨로 전환합니다.
+// 수락 버튼: 입력·마우스 상태를 게임 모드로 복구하고 OnAccepted 델리게이트를 통해 MapPortal에 이동을 요청합니다.
 void UPortalConfirmWidget::OnAcceptClicked()
 {
-    if (SavedMapName.IsNone()) return;
-
     APlayerController* PC = GetOwningPlayer();
     if (PC)
     {
@@ -63,8 +61,9 @@ void UPortalConfirmWidget::OnAcceptClicked()
         }
     }
 
-    // 포탈 이동 로직은 Persistent Level + 서브레벨 방식으로 교체 예정입니다.
-    // (현재 임시 비활성화)
+    // 실제 이동은 MapPortal의 OnConfirmAccepted에서 처리합니다.
+    OnAccepted.Broadcast();
+    RemoveFromParent();
 }
 
 // 거절 버튼: 확인창을 닫고 플레이어 입력과 마우스 상태를 원래대로 복구합니다.

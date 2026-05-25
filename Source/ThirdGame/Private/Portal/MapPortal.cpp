@@ -85,7 +85,8 @@ void AMapPortal::BeginPlay()
 void AMapPortal::OnOverlapBegin(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
     UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
 {
-    if (OtherActor && OtherActor->IsA<AMyCharacter>())
+    AMyCharacter* Character = Cast<AMyCharacter>(OtherActor);
+    if (Character && Character->IsLocallyControlled())
     {
         InteractPromptWidget->SetVisibility(true);
     }
@@ -95,7 +96,8 @@ void AMapPortal::OnOverlapBegin(UPrimitiveComponent* OverlappedComp, AActor* Oth
 void AMapPortal::OnOverlapEnd(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
     UPrimitiveComponent* OtherComp, int32 OtherBodyIndex)
 {
-    if (OtherActor && OtherActor->IsA<AMyCharacter>())
+    AMyCharacter* Character = Cast<AMyCharacter>(OtherActor);
+    if (Character && Character->IsLocallyControlled())
     {
         InteractPromptWidget->SetVisibility(false);
     }
@@ -110,43 +112,49 @@ void AMapPortal::InteractWithPortal(AMyCharacter* PlayerCharacter)
     FPortalData* PortalData = PortalDataTable->FindRow<FPortalData>(PortalRowName, TEXT("Portal Context"));
     if (!PortalData) return;
 
-    // ── 같은 레벨 내 텔레포트 ──────────────────────────────────────────
+    // ── 같은 서브레벨 내 텔레포트: 위치만 이동합니다 ───────────────────
     if (PortalData->PortalType == EPortalType::SameLevelTeleport)
     {
-        UE_LOG(LogTemp, Warning, TEXT("[PORTAL] SameLevelTeleport 시작 | TargetActorTag: %s"), *PortalData->TargetActorTag.ToString());
+        if (PortalData->TargetLocation.IsZero()) return;
 
-        if (PortalData->TargetActorTag.IsNone())
-        {
-            UE_LOG(LogTemp, Error, TEXT("[PORTAL] 실패: TargetActorTag가 비어 있습니다. 데이터 테이블을 확인하세요."));
-            return;
-        }
-
-        // 지정 태그를 가진 액터(TargetPoint 등)를 검색해 해당 위치로 즉시 이동합니다.
-        TArray<AActor*> FoundActors;
-        UGameplayStatics::GetAllActorsWithTag(GetWorld(), PortalData->TargetActorTag, FoundActors);
-
-        UE_LOG(LogTemp, Warning, TEXT("[PORTAL] 태그 '%s' 검색 결과: %d개 액터 발견"), *PortalData->TargetActorTag.ToString(), FoundActors.Num());
-
-        if (FoundActors.Num() == 0)
-        {
-            UE_LOG(LogTemp, Error, TEXT("[PORTAL] 실패: 태그 '%s'를 가진 액터를 찾지 못했습니다. PlayerStart에 태그가 정확히 설정됐는지 확인하세요."), *PortalData->TargetActorTag.ToString());
-            return;
-        }
-
-        FVector  DestLocation = FoundActors[0]->GetActorLocation();
-        FRotator DestRotation = FoundActors[0]->GetActorRotation();
-
-        UE_LOG(LogTemp, Warning, TEXT("[PORTAL] 텔레포트 실행 | 목적지: %s | 회전: %s"), *DestLocation.ToString(), *DestRotation.ToString());
-
-        PlayerCharacter->Server_TeleportTo(DestLocation, DestRotation);
-
-        UE_LOG(LogTemp, Warning, TEXT("[PORTAL] 텔레포트 완료"));
+        PlayerCharacter->Server_TeleportTo(PortalData->TargetLocation, PortalData->TargetRotation);
 
         InteractPromptWidget->SetVisibility(false);
         return;
     }
 
-    UE_LOG(LogTemp, Warning, TEXT("[PORTAL] PortalType이 SameLevelTeleport가 아닙니다. 현재 타입: %d | 데이터 테이블의 PortalType을 확인하세요."), (int32)PortalData->PortalType);
+    // ── 다른 서브레벨로 이동: 확인창을 먼저 띄운 뒤 수락 시 텔레포트합니다 ──
+    if (PortalData->PortalType == EPortalType::AnotherSubLevel)
+    {
+        if (PortalData->TargetLocation.IsZero()) return;
+        if (!ConfirmWidgetClass) return;
+
+        // 수락 시 사용할 이동 데이터를 미리 저장합니다.
+        PendingTargetSubLevelName = PortalData->TargetSubLevelName;
+        PendingUnloadSubLevelName = PortalData->CurrentSubLevelName;
+        PendingTargetLocation     = PortalData->TargetLocation;
+        PendingTargetRotation     = PortalData->TargetRotation;
+
+        UPortalConfirmWidget* ConfirmUI = CreateWidget<UPortalConfirmWidget>(GetWorld(), ConfirmWidgetClass);
+        if (!ConfirmUI) return;
+
+        ConfirmUI->InitConfirmUI(*PortalData);
+        ConfirmUI->OnAccepted.AddDynamic(this, &AMapPortal::OnConfirmAccepted);
+        ConfirmUI->AddToViewport();
+
+        APlayerController* PC = Cast<APlayerController>(PlayerCharacter->GetController());
+        if (PC)
+        {
+            FInputModeUIOnly InputMode;
+            InputMode.SetWidgetToFocus(ConfirmUI->TakeWidget());
+            PC->SetInputMode(InputMode);
+            PC->bShowMouseCursor = true;
+            PlayerCharacter->DisableInput(PC);
+        }
+
+        InteractPromptWidget->SetVisibility(false);
+        return;
+    }
 
     // ── 레벨 전환: 확인창을 띄우고 플레이어 입력을 잠급니다 ─────────────
     if (!ConfirmWidgetClass) return;
@@ -247,4 +255,23 @@ void AMapPortal::OnBossKilled(AEnemy* DeadEnemy)
 {
     bBossKilled = true;
     CheckAndApplyPortalState();
+}
+
+// 확인창 수락 콜백: 저장해둔 펜딩 데이터로 텔레포트를 실행합니다.
+void AMapPortal::OnConfirmAccepted()
+{
+    AMyCharacter* PlayerChar = Cast<AMyCharacter>(UGameplayStatics::GetPlayerCharacter(GetWorld(), 0));
+    if (!PlayerChar) return;
+
+    PlayerChar->Server_RequestPortalTravel(
+        PendingTargetSubLevelName,
+        PendingUnloadSubLevelName,
+        PendingTargetLocation,
+        PendingTargetRotation
+    );
+
+    PendingTargetSubLevelName = NAME_None;
+    PendingUnloadSubLevelName = NAME_None;
+    PendingTargetLocation     = FVector::ZeroVector;
+    PendingTargetRotation     = FRotator::ZeroRotator;
 }

@@ -45,9 +45,18 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Portal Settings")
 	TSubclassOf<UUserWidget> ConfirmWidgetClass;
 
+	// 수락 버튼 클릭 시 호출 — 저장된 펜딩 데이터로 텔레포트를 실행합니다.
+	UFUNCTION()
+	void OnConfirmAccepted();
+
 private:
 	bool bBossKilled = false;
-	
+
+	// 확인창 표시 후 수락 시 사용할 이동 데이터
+	FName    PendingTargetSubLevelName;
+	FName    PendingUnloadSubLevelName;
+	FVector  PendingTargetLocation  = FVector::ZeroVector;
+	FRotator PendingTargetRotation  = FRotator::ZeroRotator;
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

@@ -30,6 +30,7 @@ AQuestNPC::AQuestNPC()
     QuestMarkerWidget->SetWidgetSpace(EWidgetSpace::Screen);
     QuestMarkerWidget->SetRelativeLocation(FVector(0.f, 0.f, 120.f));
     QuestMarkerWidget->SetDrawSize(FVector2D(100.f, 100.f));
+
 }
 
 // 초기 마커 상태를 설정하고 플레이어의 퀘스트 업데이트 이벤트를 구독합니다.
@@ -44,6 +45,15 @@ void AQuestNPC::BeginPlay()
 
     // 퀘스트 수락·진행·완료 시 마커를 자동으로 갱신합니다.
     PlayerChar->QuestComponent->OnQuestUIUpdated.AddDynamic(this, &AQuestNPC::RefreshMarker);
+
+    // 1초마다 거리 체크하여 다른 존의 마커가 보이지 않도록 합니다.
+    GetWorld()->GetTimerManager().SetTimer(
+        MarkerDistanceTimerHandle,
+        this,
+        &AQuestNPC::RefreshMarkerByDistance,
+        1.0f,
+        true
+    );
 }
 
 // NPC가 파괴될 때 델리게이트를 해제합니다.
@@ -52,10 +62,33 @@ void AQuestNPC::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
     Super::EndPlay(EndPlayReason);
 
+    GetWorld()->GetTimerManager().ClearTimer(MarkerDistanceTimerHandle);
+
     AMyCharacter* PlayerChar = Cast<AMyCharacter>(UGameplayStatics::GetPlayerCharacter(GetWorld(), 0));
     if (PlayerChar && PlayerChar->QuestComponent)
     {
         PlayerChar->QuestComponent->OnQuestUIUpdated.RemoveDynamic(this, &AQuestNPC::RefreshMarker);
+    }
+}
+
+// 1초마다 호출: 플레이어 거리를 체크해 다른 존의 NPC 마커를 숨깁니다.
+void AQuestNPC::RefreshMarkerByDistance()
+{
+    AMyCharacter* PlayerChar = Cast<AMyCharacter>(UGameplayStatics::GetPlayerCharacter(GetWorld(), 0));
+    if (!PlayerChar) return;
+
+    constexpr float MaxMarkerDistance = 200000.f;
+    const float Dist = FVector::Dist(GetActorLocation(), PlayerChar->GetActorLocation());
+
+    if (Dist > MaxMarkerDistance)
+    {
+        // 거리 초과 시 마커를 숨깁니다.
+        UpdateMarkerUI(0);
+    }
+    else
+    {
+        // 거리 이내면 퀘스트 상태에 따라 마커를 표시합니다.
+        UpdateQuestMarker(PlayerChar);
     }
 }
 

@@ -51,4 +51,10 @@ public:
     UFUNCTION()
     void RefreshMarker();
 
+    // 1초마다 거리 체크 후 마커 표시 여부를 결정합니다.
+    UFUNCTION()
+    void RefreshMarkerByDistance();
+
+private:
+    FTimerHandle MarkerDistanceTimerHandle;
 };

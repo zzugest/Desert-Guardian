@@ -8,6 +8,8 @@
 class UTextBlock;
 class UButton;
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnPortalConfirmAccepted);
+
 UCLASS()
 class THIRDGAME_API UPortalConfirmWidget : public UUserWidget
 {
@@ -17,6 +19,10 @@ public:
 	//  외부(포탈)에서 데이터를 넘겨받아 UI 글씨를 세팅하는 함수
 	UFUNCTION(BlueprintCallable, Category = "Portal UI")
 	void InitConfirmUI(const FPortalData& PortalData);
+
+	// 수락 버튼 클릭 시 MapPortal에 알리는 델리게이트
+	UPROPERTY(BlueprintAssignable, Category = "Portal UI")
+	FOnPortalConfirmAccepted OnAccepted;
 
 protected:
 	// 위젯이 화면에 생성될 때 버튼 클릭 이벤트를 연결해줄 곳

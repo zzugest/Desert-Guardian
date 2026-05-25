@@ -335,6 +335,121 @@ void AMyCharacter::Server_TeleportTo_Implementation(FVector DestLocation, FRotat
         false, nullptr, ETeleportType::TeleportPhysics);
 }
 
+// 서버에서 실행: 목적지 서브레벨을 로드한 뒤 텔레포트하고, 이전 서브레벨을 언로드합니다.
+// TargetSubLevelName이 None이면 Persistent Level(마을)이므로 바로 텔레포트합니다.
+void AMyCharacter::Server_RequestPortalTravel_Implementation(FName TargetSubLevelName, FName UnloadSubLevelName, FVector Dest, FRotator Rot)
+{
+    PendingTravelLocation      = Dest;
+    PendingTravelRotation      = Rot;
+    PendingUnloadSubLevelName  = UnloadSubLevelName;
+    PendingTargetSubLevelName  = TargetSubLevelName;
+
+    if (TargetSubLevelName.IsNone())
+    {
+        // 목적지가 Persistent Level(마을)이면 로드 불필요 — 바로 텔레포트합니다.
+        OnPortalLevelLoaded();
+        return;
+    }
+
+    FLatentActionInfo LatentInfo;
+    LatentInfo.CallbackTarget    = this;
+    LatentInfo.ExecutionFunction = FName("OnPortalLevelLoaded");
+    LatentInfo.UUID              = 7701;
+    LatentInfo.Linkage           = 0;
+    UGameplayStatics::LoadStreamLevel(this, TargetSubLevelName, true, false, LatentInfo);
+}
+
+// 목적지 서브레벨 로드 완료 콜백: 현재 존을 업데이트하고 텔레포트 후 이전 서브레벨을 언로드합니다.
+void AMyCharacter::OnPortalLevelLoaded()
+{
+    // 현재 존 업데이트: 다른 플레이어의 레퍼런스 카운팅에 사용됩니다.
+    CurrentZoneName = PendingTargetSubLevelName;
+
+    SetActorLocationAndRotation(PendingTravelLocation, PendingTravelRotation,
+        false, nullptr, ETeleportType::TeleportPhysics);
+
+    if (!PendingUnloadSubLevelName.IsNone())
+    {
+        // 언로드 대상 서브레벨에 남아있는 플레이어 수를 카운트합니다.
+        int32 PlayerCountInOldZone = 0;
+        for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+        {
+            APlayerController* PC = It->Get();
+            if (!PC) continue;
+
+            AMyCharacter* OtherChar = Cast<AMyCharacter>(PC->GetPawn());
+            if (!OtherChar) continue;
+
+            if (OtherChar->CurrentZoneName == PendingUnloadSubLevelName)
+            {
+                PlayerCountInOldZone++;
+            }
+        }
+
+        // 해당 서브레벨에 남은 플레이어가 없을 때만 언로드합니다.
+        if (PlayerCountInOldZone == 0)
+        {
+            FLatentActionInfo LatentInfo;
+            LatentInfo.CallbackTarget    = this;
+            LatentInfo.ExecutionFunction = FName("OnPortalUnloadComplete");
+            LatentInfo.UUID              = 7702;
+            LatentInfo.Linkage           = 0;
+            UGameplayStatics::UnloadStreamLevel(this, PendingUnloadSubLevelName, LatentInfo, false);
+        }
+    }
+
+    // 이동한 클라이언트 로컬 화면에서도 존 지오메트리를 교체합니다.
+    // 다른 클라이언트에는 영향을 주지 않습니다.
+    Client_UpdateZoneStreaming(PendingTargetSubLevelName, PendingUnloadSubLevelName);
+
+    PendingTargetSubLevelName = NAME_None;
+    PendingTravelLocation     = FVector::ZeroVector;
+    PendingTravelRotation     = FRotator::ZeroRotator;
+    PendingUnloadSubLevelName = NAME_None;
+}
+
+// 이전 서브레벨 언로드 완료 콜백: 현재는 별도 처리 없음.
+void AMyCharacter::OnPortalUnloadComplete()
+{
+}
+
+// 서버 → 해당 클라이언트 전용: 이 클라이언트 로컬에서만 존 지오메트리를 로드/언로드합니다.
+// 다른 클라이언트에는 호출되지 않아 각자의 화면에 자신의 존만 렌더링됩니다.
+void AMyCharacter::Client_UpdateZoneStreaming_Implementation(FName ToLoad, FName ToUnload)
+{
+    // 새 존 지오메트리를 이 클라이언트 로컬에서만 로드합니다.
+    if (!ToLoad.IsNone())
+    {
+        FLatentActionInfo LatentInfo;
+        LatentInfo.CallbackTarget    = this;
+        LatentInfo.ExecutionFunction = FName("OnClientZoneLoaded");
+        LatentInfo.UUID              = 7703;
+        LatentInfo.Linkage           = 0;
+        UGameplayStatics::LoadStreamLevel(this, ToLoad, true, false, LatentInfo);
+    }
+
+    // 이전 존 지오메트리를 이 클라이언트 로컬에서만 언로드합니다.
+    if (!ToUnload.IsNone())
+    {
+        FLatentActionInfo LatentInfo;
+        LatentInfo.CallbackTarget    = this;
+        LatentInfo.ExecutionFunction = FName("OnClientZoneUnloaded");
+        LatentInfo.UUID              = 7704;
+        LatentInfo.Linkage           = 0;
+        UGameplayStatics::UnloadStreamLevel(this, ToUnload, LatentInfo, false);
+    }
+}
+
+// 클라이언트 로컬 존 로드 완료 콜백 — 현재는 별도 처리 없음.
+void AMyCharacter::OnClientZoneLoaded()
+{
+}
+
+// 클라이언트 로컬 존 언로드 완료 콜백 — 현재는 별도 처리 없음.
+void AMyCharacter::OnClientZoneUnloaded()
+{
+}
+
 // 서버에서 실행: 기존 Attack() 로직을 서버에서 처리한 뒤 클라이언트에 애님을 동기화합니다.
 void AMyCharacter::ServerRequestAttack_Implementation(FRotator SnapRotation)
 {
