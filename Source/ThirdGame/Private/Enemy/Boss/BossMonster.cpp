@@ -12,6 +12,7 @@
 // =========================================================================================
 
 #include "Enemy/Boss/BossMonster.h"
+#include "Net/UnrealNetwork.h"
 #include "Perception/PawnSensingComponent.h"
 #include "AIController.h"
 #include "GameFramework/Character.h"
@@ -25,6 +26,15 @@
 #include "Perception/AIPerceptionComponent.h"
 #include "MyCharacter.h"
 #include "TimerManager.h"
+
+// 복제할 변수를 등록합니다.
+void ABossMonster::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ABossMonster, bIsRagePhase);
+	DOREPLIFETIME(ABossMonster, bIsInvincible);
+	DOREPLIFETIME(ABossMonster, bIsJumpAttacking);
+}
 
 // 보스 전용 초기화 — 부모(AEnemy) 기본값을 유지합니다.
 ABossMonster::ABossMonster()
@@ -91,24 +101,104 @@ void ABossMonster::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-// 플레이어를 처음 감지하면 전투 시작 상태로 전환하고 보스 HP 바를 화면에 표시합니다.
+// 플레이어를 처음 감지하면 전투 시작 상태로 전환하고 모든 클라이언트에 HP 바를 표시합니다.
 void ABossMonster::OnBossTargetDetected(AActor* Actor, FAIStimulus Stimulus)
 {
 	if (!Actor || !Actor->IsA<AMyCharacter>()) return;
+	if (!HasAuthority()) return;
 
 	if (Stimulus.WasSuccessfullySensed())
 	{
-		// 이미 전투 중이면 중복 AddToViewport를 방지합니다.
+		// 이미 전투 중이면 중복 호출을 방지합니다.
 		if (bIsEngaged) return;
 
 		bIsEngaged = true;
+		Multicast_ShowBossUI();
+	}
+}
 
-		if (BossUI)
-		{
-			BossUI->UpdateHP(CurrentHP, MaxHP);
-			BossUI->UpdateBossName(Phase1Name);
-			BossUI->AddToViewport();
-		}
+// 2페이즈 복제 콜백: 변신 진입 시 HP 바를 갱신합니다. 이름 변경은 변신 완료 후 Multicast_OnRageComplete에서 수행합니다.
+void ABossMonster::OnRep_bIsRagePhase()
+{
+	if (BossUI)
+	{
+		BossUI->UpdateHP(CurrentHP, MaxHP);
+	}
+}
+
+// 점프 공격 상태 복제 콜백: 착지 시 클라이언트의 중력 스케일을 복구합니다.
+void ABossMonster::OnRep_bIsJumpAttacking()
+{
+	if (!bIsJumpAttacking)
+	{
+		GetCharacterMovement()->GravityScale = 1.0f;
+	}
+}
+
+// 모든 클라이언트에서 보스 HP 바를 처음 표시합니다.
+void ABossMonster::Multicast_ShowBossUI_Implementation()
+{
+	if (BossUI)
+	{
+		BossUI->UpdateHP(CurrentHP, MaxHP);
+		BossUI->UpdateBossName(Phase1Name);
+		BossUI->AddToViewport();
+	}
+}
+
+// 모든 클라이언트에서 변신 몽타주를 재생하고 HP 바를 갱신합니다.
+void ABossMonster::Multicast_EnterRagePhase_Implementation()
+{
+	if (!HasAuthority() && TransformationMontage)
+	{
+		PlayAnimMontage(TransformationMontage);
+	}
+
+	if (BossUI)
+	{
+		BossUI->UpdateHP(CurrentHP, MaxHP);
+	}
+}
+
+// 모든 클라이언트의 보스 HP 바를 갱신합니다.
+void ABossMonster::Multicast_UpdateBossHP_Implementation(float NewHP, float NewMaxHP)
+{
+	if (BossUI)
+	{
+		BossUI->UpdateHP(NewHP, NewMaxHP);
+	}
+}
+
+// 변신 애니메이션 완료 후 모든 클라이언트의 HP 바 이름과 수치를 갱신합니다.
+void ABossMonster::Multicast_OnRageComplete_Implementation(float NewHP, float NewMaxHP)
+{
+	if (BossUI)
+	{
+		BossUI->UpdateBossName(Phase2Name);
+		BossUI->UpdateHP(NewHP, NewMaxHP);
+	}
+}
+
+// 모든 클라이언트에서 경고 데칼을 스폰합니다.
+void ABossMonster::Multicast_SpawnWarningDecal_Implementation(FVector DecalLocation)
+{
+	if (!WarningDecalMaterial) return;
+
+	WarningDecal = UGameplayStatics::SpawnDecalAtLocation(
+		GetWorld(),
+		WarningDecalMaterial,
+		FVector(WarningDecalRadius),
+		DecalLocation,
+		FRotator(-90.f, 0.f, 0.f));
+}
+
+// 모든 클라이언트에서 경고 데칼을 제거합니다.
+void ABossMonster::Multicast_RemoveWarningDecal_Implementation()
+{
+	if (WarningDecal)
+	{
+		WarningDecal->DestroyComponent();
+		WarningDecal = nullptr;
 	}
 }
 
@@ -150,12 +240,8 @@ void ABossMonster::EnterRagePhase()
 			StopAnimMontage(JumpAttackMontage);
 		}
 
-		// 착지 없이 전환됐으므로 Landed()가 호출되지 않아 경고 데칼을 여기서 제거합니다.
-		if (WarningDecal)
-		{
-			WarningDecal->DestroyComponent();
-			WarningDecal = nullptr;
-		}
+		// 착지 없이 전환됐으므로 Landed()가 호출되지 않아 경고 데칼을 모든 클라이언트에서 제거합니다.
+		Multicast_RemoveWarningDecal();
 	}
 
 	// 2페이즈 이동 속도를 적용합니다.
@@ -178,7 +264,10 @@ void ABossMonster::EnterRagePhase()
 		AICon->GetBrainComponent()->StopLogic(TEXT("Transformation"));
 	}
 
-	// 변신 몽타주를 재생하고 종료 시 EndRageTransformation을 호출합니다.
+	// 모든 클라이언트에 변신 몽타주와 HP 바 갱신을 전달합니다.
+	Multicast_EnterRagePhase();
+
+	// 서버에서도 몽타주를 직접 재생해야 종료 델리게이트가 정상 동작합니다.
 	if (TransformationMontage)
 	{
 		PlayAnimMontage(TransformationMontage);
@@ -204,11 +293,8 @@ void ABossMonster::EndRageTransformation(UAnimMontage* Montage, bool bInterrupte
 	bIsTargetable = true;
 	CurrentHP = MaxHP;
 
-	if (BossUI)
-	{
-		BossUI->UpdateHP(CurrentHP, MaxHP);
-		BossUI->UpdateBossName(Phase2Name);
-	}
+	// 변신 완료 후 이름과 HP를 모든 클라이언트에 갱신합니다.
+	Multicast_OnRageComplete(CurrentHP, MaxHP);
 
 	AAIController* AICon = Cast<AAIController>(GetController());
 	if (AICon && AICon->GetBrainComponent())
@@ -228,7 +314,7 @@ float ABossMonster::TakeDamage(float DamageAmount, struct FDamageEvent const& Da
 	if (!bIsRagePhase && (CurrentHP - DamageAmount) <= 0.0f)
 	{
 		CurrentHP = 0.01f;
-		if (BossUI) BossUI->UpdateHP(CurrentHP, MaxHP);
+		Multicast_UpdateBossHP(0.0f, MaxHP);
 
 		bIsTargetable = false;
 		EnterRagePhase();
@@ -237,7 +323,7 @@ float ABossMonster::TakeDamage(float DamageAmount, struct FDamageEvent const& Da
 
 	float ActualDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 
-	if (BossUI) BossUI->UpdateHP(CurrentHP, MaxHP);
+	Multicast_UpdateBossHP(CurrentHP, MaxHP);
 
 	return ActualDamage;
 }
@@ -256,7 +342,7 @@ void ABossMonster::BaseAttack()
 	if (!SelectedMontage) return;
 
 	bCanAttack = false;
-	PlayAnimMontage(SelectedMontage);
+	MulticastPlayAttackMontage(SelectedMontage);
 
 	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
 	if (AnimInstance)
@@ -362,7 +448,7 @@ void ABossMonster::LaunchToAir()
 	SetActorRotation(ToPlayer.Rotation());
 	LaunchCharacter(LaunchVelocity, true, true);
 
-	// 플레이어 발밑 지면에 경고 데칼을 스폰합니다.
+	// 플레이어 발밑 지면에 경고 데칼을 모든 클라이언트에 스폰합니다.
 	if (WarningDecalMaterial)
 	{
 		FVector TraceStart = FVector(PlayerLoc.X, PlayerLoc.Y, PlayerLoc.Z + 100.f);
@@ -378,12 +464,7 @@ void ABossMonster::LaunchToAir()
 			DecalLocation = GroundHit.ImpactPoint;
 		}
 
-		WarningDecal = UGameplayStatics::SpawnDecalAtLocation(
-			GetWorld(),
-			WarningDecalMaterial,
-			FVector(WarningDecalRadius),
-			DecalLocation,
-			FRotator(-90.f, 0.f, 0.f));
+		Multicast_SpawnWarningDecal(DecalLocation);
 	}
 }
 
@@ -401,6 +482,12 @@ void ABossMonster::Landed(const FHitResult& Hit)
 		if (AnimInstance && JumpAttackMontage)
 		{
 			AnimInstance->Montage_JumpToSection(FName("LandSmash"), JumpAttackMontage);
+		}
+
+		// 서버에서만 Multicast를 호출해 모든 클라이언트의 데칼을 제거합니다.
+		if (HasAuthority())
+		{
+			Multicast_RemoveWarningDecal();
 		}
 	}
 }

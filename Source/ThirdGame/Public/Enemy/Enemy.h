@@ -12,6 +12,7 @@
 #include "GameFramework/Character.h"
 #include "Engine/DataTable.h"
 #include "Perception/AIPerceptionTypes.h"
+#include "NPC/Quest/QuestData.h"
 #include "Enemy.generated.h"
 
 class UWidgetComponent;
@@ -183,6 +184,10 @@ public:
 	UFUNCTION(NetMulticast, Unreliable)
 	void MulticastPlayAttackMontage(UAnimMontage* Montage);
 
+	// 적 처치 시 모든 클라이언트의 QuestSubsystem에 퀘스트 진행을 반영합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_UpdateQuestObjective(EQuestTaskType TaskType, FName TargetRowName);
+
 	// ���� ���Ͱ� ��Ÿ�Ӱ� �����ϰ� ������ �õ��� �� �ִ� �������� �Ǵ��ϴ� �÷����Դϴ�.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat")
 	bool bCanAttack = true;
@@ -292,4 +297,5 @@ public:
 	APlayerCameraManager* CachedCameraManager;
 
 	FText MyDisplayName;
+
 };

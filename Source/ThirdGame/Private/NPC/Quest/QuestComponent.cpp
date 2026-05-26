@@ -16,6 +16,9 @@
 #include "Inventory/InventoryComponent.h"
 #include "Item/ItemData.h"
 #include "MyCharacter.h"
+#include "AutoMoveComponent.h"
+#include "NPC/Quest/AutoMoveTargetData.h"
+#include "Kismet/GameplayStatics.h"
 
 UQuestComponent::UQuestComponent()
 {
@@ -307,4 +310,76 @@ bool UQuestComponent::IsQuestCompleted(FName QuestID)
     if (!QuestSub) return false;
 
     return QuestSub->CompletedQuests.Contains(QuestID);
+}
+
+// 현재 퀘스트 단계에 따라 자동이동 목적지를 결정하고 이동을 시작합니다.
+// 사냥 단계(미완료 태스크 있음) → AutoMoveTargetTable의 HuntTargetLocation으로 이동
+// 완료 보고 단계(bIsReadyToComplete) → AutoMoveTargetTable의 CompletionNPCTag로 NPC를 찾아 이동
+void UQuestComponent::StartAutoMoveToHuntTarget()
+{
+    AMyCharacter* MyChar = Cast<AMyCharacter>(GetOwner());
+    if (!MyChar || !MyChar->IsLocallyControlled() || !MyChar->AutoMoveComp)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[AutoMove] MyChar or AutoMoveComp null, or not locally controlled"));
+        return;
+    }
+
+    if (!AutoMoveTargetTable)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[AutoMove] AutoMoveTargetTable이 설정되지 않았습니다"));
+        return;
+    }
+
+    UQuestSubsystem* QuestSub = GetQuestSubsystem();
+    if (!QuestSub)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[AutoMove] QuestSubsystem null"));
+        return;
+    }
+
+    for (const FActiveQuestInfo& ActiveQuest : QuestSub->ActiveQuests)
+    {
+        FAutoMoveTargetData* TargetData = AutoMoveTargetTable->FindRow<FAutoMoveTargetData>(ActiveQuest.QuestID, TEXT("AutoMoveTarget"));
+        if (!TargetData)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[AutoMove] AutoMoveTargetTable에 [%s] 행 없음"), *ActiveQuest.QuestID.ToString());
+            continue;
+        }
+
+        if (!ActiveQuest.bIsReadyToComplete)
+        {
+            // 사냥 단계: DataTable에 입력된 HuntTargetLocation으로 이동합니다.
+            if (!TargetData->HuntTargetLocation.IsZero())
+            {
+                UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 사냥 목적지로 이동: %s"), *TargetData->HuntTargetLocation.ToString());
+                MyChar->AutoMoveComp->StartAutoMove(TargetData->HuntTargetLocation);
+                return;
+            }
+            UE_LOG(LogTemp, Warning, TEXT("[AutoMove] HuntTargetLocation이 (0,0,0)입니다. DataTable을 확인하세요."));
+        }
+        else
+        {
+            // 완료 보고 단계: CompletionNPCTag로 레벨에서 NPC를 찾아 이동합니다.
+            if (!TargetData->CompletionNPCTag.IsNone())
+            {
+                TArray<AActor*> TaggedActors;
+                UGameplayStatics::GetAllActorsWithTag(GetWorld(), TargetData->CompletionNPCTag, TaggedActors);
+
+                if (TaggedActors.Num() > 0)
+                {
+                    FVector NPCLocation = TaggedActors[0]->GetActorLocation();
+                    UE_LOG(LogTemp, Warning, TEXT("[AutoMove] NPC 위치로 이동: %s"), *NPCLocation.ToString());
+                    MyChar->AutoMoveComp->StartAutoMove(NPCLocation);
+                    return;
+                }
+                UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 태그 [%s]를 가진 NPC를 찾지 못했습니다"), *TargetData->CompletionNPCTag.ToString());
+            }
+            else
+            {
+                UE_LOG(LogTemp, Warning, TEXT("[AutoMove] CompletionNPCTag가 비어있습니다. DataTable을 확인하세요."));
+            }
+        }
+    }
+
+    UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 이동 가능한 활성 퀘스트 없음"));
 }

@@ -31,6 +31,7 @@ class UUserWidget;
 class UMinimapComponent;
 class UMinimapWidget;
 class UHUDRootWidget;
+class UAutoMoveComponent;
 
 
 UCLASS()
@@ -107,6 +108,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Component")
 	UInventoryComponent* InventoryComp;
 
+	// NavMesh 경로 기반 자동이동을 처리하는 컴포넌트입니다.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Component")
+	UAutoMoveComponent* AutoMoveComp;
+
 	// =============================================================
 	// [�Է�] ���� �׼� (Enhanced Input)
 	// =============================================================
@@ -170,6 +175,16 @@ public:
 	// 목적지 서브레벨 로드 완료 시 호출 — 텔레포트 실행 후 이전 서브레벨 언로드를 요청합니다.
 	UFUNCTION()
 	void OnPortalLevelLoaded();
+
+	// 클라이언트 → 서버: 같은 존에 있는 플레이어 전원을 함께 이동시킵니다.
+	// SameLevelTeleport: TargetSubLevelName·UnloadSubLevelName 모두 None, 위치만 이동
+	// AnotherSubLevel  : 서브레벨 로드 → 전원 텔레포트 → 이전 서브레벨 언로드
+	UFUNCTION(Server, Reliable)
+	void Server_RequestGroupPortalTravel(FName TargetSubLevelName, FName UnloadSubLevelName, FName SourceZoneName, FVector Dest, FRotator Rot);
+
+	// 그룹 이동용 목적지 서브레벨 로드 완료 콜백
+	UFUNCTION()
+	void OnGroupPortalLevelLoaded();
 
 	// 이전 서브레벨 언로드 완료 시 호출 — 현재는 별도 처리 없음.
 	UFUNCTION()
@@ -236,10 +251,15 @@ public:
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastPlayRollMontage(FName SectionName);
 
-	// 클라이언트 → 서버: 클라이언트 측 WeaponTrace 히트 위치를 전달해 서버에서 이펙트를 스폰합니다.
-	// 공중 공격 시 서버의 SimulatedProxy 위치 오차로 트레이스가 빗나가는 경우를 보정합니다.
-	UFUNCTION(Server, Unreliable)
-	void ServerReportWeaponHit(FVector HitLocation, FRotator HitNormal);
+	// 클라이언트 → 서버: 클라이언트 트레이스가 감지한 히트 액터와 위치를 전달합니다.
+	// 서버에서 AttackID로 데미지를 재계산해 적용하므로 클라이언트 조작이 불가합니다.
+	UFUNCTION(Server, Reliable)
+	void Server_ReportHitEnemy(AActor* HitEnemy, FVector HitLocation, FRotator HitNormal, FName AttackID);
+
+	// 클라이언트 → 서버: 마법 AoE 트레이스가 감지한 적 목록을 한 번에 전달합니다.
+	// 서버에서 MagicAttackID로 데미지를 재계산해 적용하므로 클라이언트 조작이 불가합니다.
+	UFUNCTION(Server, Reliable)
+	void Server_ReportMagicHit(const TArray<AActor*>& HitEnemies, FName MagicAttackID);
 
 	// 클라이언트 → 서버: 아이템 줍기 요청. 서버에서 유효성 검증 후 인벤토리에 추가하고 액터를 제거합니다.
 	UFUNCTION(Server, Reliable)
@@ -394,6 +414,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
 	UInputAction* OpenSkillWindowAction;
 
+	// Ctrl 키를 누르는 동안 마우스 커서를 표시합니다.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* ShowCursorAction;
+
+	// Ctrl 키를 누를 때 마우스 커서를 표시하고 UI 입력을 허용합니다.
+	void OnShowCursorPressed(const FInputActionValue& Value);
+
+	// Ctrl 키를 뗄 때 마우스 커서를 숨기고 게임 입력 전용 모드로 복원합니다.
+	void OnShowCursorReleased(const FInputActionValue& Value);
+
 	// ȭ�鿡 ǥ�õ� ��ų Ʈ�� ���� Ŭ�����Դϴ�.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI")
 	TSubclassOf<UUserWidget> SkillWindowClass;
@@ -471,4 +501,11 @@ private:
 	FRotator PendingTravelRotation     = FRotator::ZeroRotator;
 	FName    PendingUnloadSubLevelName = NAME_None;
 	FName    PendingTargetSubLevelName = NAME_None;
+
+	// 그룹 이동 대기 정보: 서브레벨 로드 완료 후 전원 텔레포트에 사용됩니다.
+	FVector  PendingGroupLocation      = FVector::ZeroVector;
+	FRotator PendingGroupRotation      = FRotator::ZeroRotator;
+	FName    PendingGroupTargetSub     = NAME_None;
+	FName    PendingGroupUnloadSub     = NAME_None;
+	FName    PendingGroupSourceZone    = NAME_None;
 };

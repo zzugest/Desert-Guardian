@@ -39,6 +39,10 @@ public:
 	UFUNCTION()
 	void UpdateBuffList();
 
+	// 1초마다 버프 UI 표시 시간을 로그로 출력합니다.
+	UFUNCTION()
+	void LogBuffUIStatus();
+
 private:
 	// 매번 찾지 않도록 NativeConstruct에서 캐싱
 	UPROPERTY()
@@ -46,4 +50,6 @@ private:
 
 	UPROPERTY()
 	UCombatComponent* CachedCombatComp;
+
+	FTimerHandle BuffUILogTimerHandle;
 };

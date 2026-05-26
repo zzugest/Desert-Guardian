@@ -40,6 +40,8 @@ void UBuffListWidget::NativeConstruct()
 
         UpdateBuffList();
     } // ���⼭ MyChar ���� �����ϴ� }
+
+    GetWorld()->GetTimerManager().SetTimer(BuffUILogTimerHandle, this, &UBuffListWidget::LogBuffUIStatus, 1.0f, true);
 }
 
 
@@ -57,6 +59,8 @@ void UBuffListWidget::NativeDestruct()
     {
         CachedCombatComp->OnCombatBuffUpdated.RemoveDynamic(this, &UBuffListWidget::UpdateBuffList);
     }
+
+    GetWorld()->GetTimerManager().ClearTimer(BuffUILogTimerHandle);
 }
 
 void UBuffListWidget::UpdateBuffList()
@@ -108,12 +112,36 @@ void UBuffListWidget::UpdateBuffList()
             UBuffIconWidget* PotionWidget = CreateWidget<UBuffIconWidget>(GetWorld(), BuffIconClass);
             if (!PotionWidget) continue;
 
-            // 서버는 타이머에서 남은 시간을 읽고, 클라이언트는 MaxDuration을 대신 사용합니다.
-            float TimeLeft = GetWorld()->GetTimerManager().GetTimerRemaining(CachedCombatComp->ItemAttackBuffTimerHandle);
-            if (TimeLeft <= 0.0f) TimeLeft = Buff.MaxDuration;
+            float TimeLeft = FMath::Max(0.0f, CachedCombatComp->ItemBuffClientEndTime - GetWorld()->GetTimeSeconds());
 
             PotionWidget->InitBuff(FoundItemData->ItemIcon, Buff.MaxDuration, TimeLeft);
             BuffBox->AddChildToHorizontalBox(PotionWidget);
+        }
+    }
+}
+
+// 1초마다 호출되어 버프 UI에 표시되는 남은 시간을 로그로 출력합니다.
+void UBuffListWidget::LogBuffUIStatus()
+{
+    if (CachedSkillComp)
+    {
+        for (const FActiveBuff& Buff : CachedSkillComp->ActiveBuffs)
+        {
+            UE_LOG(LogTemp, Warning,
+                TEXT("[BUFF_UI] SkillBuff=%s | UI표시시간=%.1f초"),
+                *Buff.BuffID.ToString(), Buff.RemainingTime);
+        }
+    }
+
+    if (CachedCombatComp)
+    {
+        for (const FActiveBuffInfo& Buff : CachedCombatComp->ActiveBuffs)
+        {
+            if (!Buff.bIsItemBuff) continue;
+            float UITimeLeft = FMath::Max(0.0f, CachedCombatComp->ItemBuffClientEndTime - GetWorld()->GetTimeSeconds());
+            UE_LOG(LogTemp, Warning,
+                TEXT("[BUFF_UI] ItemBuff=%s | UI표시시간=%.1f초"),
+                *Buff.BuffID.ToString(), UITimeLeft);
         }
     }
 }

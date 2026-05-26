@@ -55,6 +55,8 @@ void UCombatComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
 // ActiveBuffs 복제 수신 시 호출 — 클라이언트 측 버프 플래그와 ID를 동기화하고 위젯을 갱신합니다.
 void UCombatComponent::OnRep_ActiveBuffs()
 {
+    bool bPrevItemBuffActive = bIsItemAttackBuffActive;
+
     bIsAttackBuffActive     = false;
     bIsItemAttackBuffActive = false;
     ActiveAttackBuffID      = NAME_None;
@@ -71,6 +73,19 @@ void UCombatComponent::OnRep_ActiveBuffs()
         {
             bIsAttackBuffActive = true;
             ActiveAttackBuffID  = Buff.BuffID;
+        }
+    }
+
+    // 아이템 버프가 새로 생겼을 때만 클라이언트 로컬 카운트다운을 시작합니다.
+    if (bIsItemAttackBuffActive && !bPrevItemBuffActive)
+    {
+        for (const FActiveBuffInfo& Buff : ActiveBuffs)
+        {
+            if (Buff.bIsItemBuff)
+            {
+                ItemBuffClientEndTime = GetWorld()->GetTimeSeconds() + Buff.MaxDuration;
+                break;
+            }
         }
     }
 
@@ -150,6 +165,8 @@ void UCombatComponent::BeginPlay()
         }
     }
 
+    GetWorld()->GetTimerManager().SetTimer(BuffLogTimerHandle, this, &UCombatComponent::LogBuffStatus, 1.0f, true);
+
     UE_LOG(LogTemp, Warning, TEXT("[LV_TRAVEL] CombatComp BeginPlay | Auth:%s | HP:%.0f/%.0f | MP:%.0f/%.0f | SP:%.0f/%.0f | AtkPow:%.1f | SkillBuff:%s | ItemBuff:%s"),
         (GetOwner() && GetOwner()->HasAuthority()) ? TEXT("SERVER") : TEXT("CLIENT"),
         CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP, BaseAttackPower,
@@ -198,8 +215,32 @@ void UCombatComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
     // 타이머가 살아있으면 GC 이후 콜백이 호출되어 크래시가 발생할 수 있습니다.
     GetWorld()->GetTimerManager().ClearTimer(AttackBuffTimerHandle);
     GetWorld()->GetTimerManager().ClearTimer(MagicComboTimerHandle);
+    GetWorld()->GetTimerManager().ClearTimer(BuffLogTimerHandle);
 
     Super::EndPlay(EndPlayReason);
+}
+
+// 1초마다 호출되어 활성 버프의 실제 남은 시간을 로그로 출력합니다.
+void UCombatComponent::LogBuffStatus()
+{
+    if (ActiveBuffs.IsEmpty()) return;
+
+    float SkillTimerLeft = GetWorld()->GetTimerManager().GetTimerRemaining(AttackBuffTimerHandle);
+    float ItemTimerLeft  = GetWorld()->GetTimerManager().GetTimerRemaining(ItemAttackBuffTimerHandle);
+
+    for (const FActiveBuffInfo& Buff : ActiveBuffs)
+    {
+        float ClientTimeLeft = Buff.bIsItemBuff
+            ? FMath::Max(0.0f, ItemBuffClientEndTime - GetWorld()->GetTimeSeconds())
+            : FMath::Max(0.0f, SkillTimerLeft);
+        float TimerLeft      = Buff.bIsItemBuff ? ItemTimerLeft : SkillTimerLeft;
+        const TCHAR* Auth    = (GetOwner() && GetOwner()->HasAuthority()) ? TEXT("SERVER") : TEXT("CLIENT");
+        const TCHAR* IsItem  = Buff.bIsItemBuff ? TEXT("true") : TEXT("false");
+
+        UE_LOG(LogTemp, Warning,
+            TEXT("[BUFF_REAL] Auth:%s | BuffID=%s | IsItem=%s | ClientLocal=%.1f s | TimerBased=%.1f s"),
+            Auth, *Buff.BuffID.ToString(), IsItem, ClientTimeLeft, TimerLeft);
+    }
 }
 
 // 현재 HP·MP·SP 수치를 StatSubsystem에 저장해 레벨 전환 후에도 유지되도록 합니다.
@@ -557,6 +598,10 @@ void UCombatComponent::WeaponTraceTick()
 
     if (!CachedWeaponMesh) return;
 
+    // 트레이스는 이 캐릭터를 직접 조작하는 머신에서만 실행합니다.
+    // 서버는 다른 클라이언트의 캐릭터에 대해 독립적으로 트레이스하지 않습니다.
+    if (!Owner->IsLocallyControlled()) return;
+
     FVector BaseLoc = CachedWeaponMesh->GetSocketLocation(FName("Base"));
     FVector TipLoc  = CachedWeaponMesh->GetSocketLocation(FName("Tip"));
 
@@ -591,10 +636,16 @@ void UCombatComponent::WeaponTraceTick()
         AEnemy* HitEnemy = Cast<AEnemy>(HitActor);
         if (HitEnemy && HitEnemy->bIsDead) continue;
 
-        // 데미지는 서버에서만 한 번 적용합니다. (클라이언트 중복 적용 방지)
         if (Owner->HasAuthority())
         {
+            // 리슨 서버 본인: 트레이스 결과를 직접 서버에 적용합니다.
             UGameplayStatics::ApplyDamage(HitActor, FinalDamage, Owner->GetController(), Owner, UDamageType::StaticClass());
+        }
+        else
+        {
+            // 클라이언트: 맞은 액터와 위치를 서버에 전달해 데미지 처리를 위임합니다.
+            // 서버에서 AttackID로 데미지를 재계산하므로 클라이언트 조작 불가합니다.
+            Owner->Server_ReportHitEnemy(HitActor, Hit.ImpactPoint, Hit.ImpactNormal.Rotation(), CurrentAttackID);
         }
 
         // 히트 위치에 이펙트 스폰 (Niagara 우선, 없으면 Cascade)
@@ -611,13 +662,6 @@ void UCombatComponent::WeaponTraceTick()
                 Hit.ImpactPoint, Hit.ImpactNormal.Rotation());
         }
 
-        // 클라이언트 로컬 히트를 서버에 보고해 서버 화면에서도 이펙트가 보이도록 합니다.
-        // 특히 공중 공격 시 서버의 SimulatedProxy 위치 오차로 WeaponTrace가 빗나가는 경우를 보정합니다.
-        if (!Owner->HasAuthority() && Owner->IsLocallyControlled())
-        {
-            Owner->ServerReportWeaponHit(Hit.ImpactPoint, Hit.ImpactNormal.Rotation());
-        }
-
         // 데미지 텍스트는 공격한 본인 화면에서만 표시합니다.
         if (Owner->IsLocallyControlled())
         {
@@ -630,6 +674,45 @@ void UCombatComponent::WeaponTraceTick()
 // 특정 공격 타입 히트를 실행하기 위해 예약된 함수입니다. (현재 미구현)
 void UCombatComponent::ExecuteAttackHit(FName HitAttackID)
 {
+}
+
+// 클라이언트가 보고한 히트를 서버에서 처리합니다.
+// AttackID로 데미지를 서버에서 직접 재계산해 클라이언트 조작을 방지합니다.
+void UCombatComponent::ServerApplyHitDamage(AActor* HitEnemy, FVector HitLocation, FRotator HitNormal, FName AttackID)
+{
+    if (!HitEnemy || !AttackDataTable) return;
+
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner) return;
+
+    FAttackData* AttackData = AttackDataTable->FindRow<FAttackData>(AttackID, TEXT("ClientHitReport"));
+    if (!AttackData) return;
+
+    float FinalDamage = BaseAttackPower * AttackData->DamageMultiplier;
+
+    UGameplayStatics::ApplyDamage(HitEnemy, FinalDamage, Owner->GetController(), Owner, UDamageType::StaticClass());
+    SpawnHitEffectAt(HitLocation, HitNormal);
+}
+
+// 클라이언트가 보고한 마법 AoE 히트를 서버에서 처리합니다.
+// MagicAttackID로 데미지를 서버에서 직접 재계산해 클라이언트 조작을 방지합니다.
+void UCombatComponent::ServerApplyMagicDamage(const TArray<AActor*>& HitEnemies, FName MagicAttackID)
+{
+    if (!AttackDataTable) return;
+
+    AMyCharacter* Owner = GetCharacterOwner();
+    if (!Owner) return;
+
+    FAttackData* Data = AttackDataTable->FindRow<FAttackData>(MagicAttackID, TEXT("MagicHitReport"));
+    if (!Data) return;
+
+    float FinalDamage = BaseAttackPower * Data->DamageMultiplier;
+
+    for (AActor* Enemy : HitEnemies)
+    {
+        if (!Enemy) continue;
+        UGameplayStatics::ApplyDamage(Enemy, FinalDamage, Owner->GetController(), Owner, UDamageType::StaticClass());
+    }
 }
 
 // 피해를 받아 HP를 감소시킵니다. HP가 0 이하가 되면 사망 처리를 추가할 위치입니다.
@@ -794,19 +877,19 @@ void UCombatComponent::ApplyMagicDamage()
     AMyCharacter* Owner = GetCharacterOwner();
     if (!Owner || !AttackDataTable) return;
 
-    // 데미지 적용(서버)과 데미지 텍스트(로컬) 중 하나도 해당하지 않으면 조기 종료합니다.
-    if (!Owner->HasAuthority() && !Owner->IsLocallyControlled()) return;
+    // 트레이스는 이 캐릭터를 직접 조작하는 머신에서만 실행합니다.
+    if (!Owner->IsLocallyControlled()) return;
 
-    FString RowNameStr  = FString::Printf(TEXT("Magic%d"), CurrentMagicCombo);
+    FString RowNameStr    = FString::Printf(TEXT("Magic%d"), CurrentMagicCombo);
     FName   MagicAttackID = FName(*RowNameStr);
-    FAttackData* Data   = AttackDataTable->FindRow<FAttackData>(MagicAttackID, TEXT("MagicExplosion"));
+    FAttackData* Data     = AttackDataTable->FindRow<FAttackData>(MagicAttackID, TEXT("MagicExplosion"));
     if (!Data) return;
 
     float FinalDamage  = BaseAttackPower * Data->DamageMultiplier;
     float DamageRadius = 300.0f;
 
-TArray<AActor*>     IgnoredActors;
-    TArray<FHitResult>  HitResults;
+    TArray<AActor*>    IgnoredActors;
+    TArray<FHitResult> HitResults;
     IgnoredActors.Add(Owner);
 
     bool bHit = UKismetSystemLibrary::SphereTraceMulti(
@@ -821,34 +904,40 @@ TArray<AActor*>     IgnoredActors;
     if (bHit)
     {
         TArray<AActor*> DamagedActors;
+        TArray<AActor*> HitEnemiesForServer;
 
         for (const FHitResult& Hit : HitResults)
         {
             AActor* HitActor = Hit.GetActor();
+            if (!HitActor || DamagedActors.Contains(HitActor)) continue;
 
-            if (HitActor && !DamagedActors.Contains(HitActor))
+            APawn* HitPawn = Cast<APawn>(HitActor);
+            if (!HitPawn) continue;
+
+            AEnemy* HitEnemy = Cast<AEnemy>(HitPawn);
+            if (HitEnemy && HitEnemy->bIsDead) continue;
+
+            if (Owner->HasAuthority())
             {
-                APawn* HitPawn = Cast<APawn>(HitActor);
-                if (HitPawn)
-                {
-                    AEnemy* HitEnemy = Cast<AEnemy>(HitPawn);
-                    if (HitEnemy && HitEnemy->bIsDead) continue;
-
-                    // 데미지는 서버에서만 한 번 적용합니다. (클라이언트 중복 적용 방지)
-                    if (Owner->HasAuthority())
-                    {
-                        UGameplayStatics::ApplyDamage(HitPawn, FinalDamage, Owner->GetController(), Owner, UDamageType::StaticClass());
-                    }
-
-                    // 데미지 텍스트는 공격한 본인 화면에서만 표시합니다.
-                    if (Owner->IsLocallyControlled())
-                    {
-                        Owner->OnSpawnDamageText(Hit.ImpactPoint, FinalDamage);
-                    }
-
-                    DamagedActors.Add(HitActor);
-                }
+                // 리슨 서버 본인: 직접 데미지 적용
+                UGameplayStatics::ApplyDamage(HitPawn, FinalDamage, Owner->GetController(), Owner, UDamageType::StaticClass());
             }
+            else
+            {
+                // 클라이언트: 서버에 보고할 목록에 추가
+                HitEnemiesForServer.Add(HitActor);
+            }
+
+            // 데미지 텍스트는 공격한 본인 화면에서만 표시합니다.
+            Owner->OnSpawnDamageText(Hit.ImpactPoint, FinalDamage);
+
+            DamagedActors.Add(HitActor);
+        }
+
+        // 클라이언트: 맞은 적 목록을 서버에 한 번에 보고합니다.
+        if (!Owner->HasAuthority() && HitEnemiesForServer.Num() > 0)
+        {
+            Owner->Server_ReportMagicHit(HitEnemiesForServer, MagicAttackID);
         }
     }
 
@@ -885,6 +974,7 @@ void UCombatComponent::ApplyAttackBuff(float Amount, float Duration, FName BuffI
 
         IncreaseAttackPower(Amount);
         GetWorld()->GetTimerManager().SetTimer(ItemAttackBuffTimerHandle, this, &UCombatComponent::RemoveItemAttackBuff, Duration, false);
+        ItemBuffClientEndTime = GetWorld()->GetTimeSeconds() + Duration;
     }
     else
     {

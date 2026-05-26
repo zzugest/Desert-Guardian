@@ -83,6 +83,16 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Quest")
 	bool IsQuestCompleted(FName QuestID);
 
+	// 현재 퀘스트 단계에 따라 자동이동 목적지를 결정하고 이동을 시작합니다.
+	// 사냥 단계 → AutoMoveTargetTable의 HuntTargetLocation으로 이동
+	// 완료 보고 단계 → AutoMoveTargetTable의 CompletionNPCTag로 NPC를 찾아 이동
+	UFUNCTION(BlueprintCallable, Category = "Quest")
+	void StartAutoMoveToHuntTarget();
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Data")
 	UDataTable* ItemDataTable;
+
+	// 퀘스트 자동이동 목적지 테이블 (Row 키 = 퀘스트 RowName)
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Quest")
+	UDataTable* AutoMoveTargetTable;
 };

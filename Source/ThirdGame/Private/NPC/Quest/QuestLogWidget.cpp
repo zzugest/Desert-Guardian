@@ -9,15 +9,23 @@
 
 #include "NPC/Quest/QuestLogWidget.h"
 #include "Components/RichTextBlock.h"
-#include "Components/Border.h"
+#include "Components/VerticalBox.h"
+#include "Components/Button.h"
 #include "GameFramework/Character.h"
 #include "Kismet/GameplayStatics.h"
 #include "NPC/Quest/QuestComponent.h"
+#include "NPC/Quest/QuestSubsystem.h"
 
 // 위젯 생성 시 플레이어의 QuestComponent를 캐시하고 업데이트 이벤트를 바인딩합니다.
 void UQuestLogWidget::NativeConstruct()
 {
     Super::NativeConstruct();
+
+    // 버튼 바인딩은 CachedQuestComp와 무관하게 항상 먼저 설정합니다.
+    if (AutoMoveButton)
+    {
+        AutoMoveButton->OnClicked.AddDynamic(this, &UQuestLogWidget::OnAutoMoveClicked);
+    }
 
     ACharacter* PlayerChar = UGameplayStatics::GetPlayerCharacter(this, 0);
     if (!PlayerChar) return;
@@ -45,7 +53,7 @@ void UQuestLogWidget::NativeDestruct()
 }
 
 // QuestComponent에서 최신 로그 텍스트를 받아 UI에 반영합니다.
-// 퀘스트가 없으면 배경 Border를 Collapsed로 처리해 공간을 차지하지 않습니다.
+// 퀘스트가 없으면 배경 Border와 자동이동 버튼을 Collapsed로 처리해 공간을 차지하지 않습니다.
 void UQuestLogWidget::UpdateQuestLog()
 {
     if (!CachedQuestComp || !QuestListText || !QuestBackground) return;
@@ -59,4 +67,36 @@ void UQuestLogWidget::UpdateQuestLog()
         : ESlateVisibility::Visible;
 
     QuestBackground->SetVisibility(NewVisibility);
+
+    // 활성 퀘스트가 있으면 자동이동 버튼을 표시합니다.
+    // 사냥 단계(미완료 태스크)와 완료 보고 단계(bIsReadyToComplete) 모두 버튼이 필요합니다.
+    if (AutoMoveButton)
+    {
+        bool bHasActiveQuest = false;
+
+        UQuestSubsystem* QuestSub = nullptr;
+        if (UGameInstance* GI = GetGameInstance())
+        {
+            QuestSub = GI->GetSubsystem<UQuestSubsystem>();
+        }
+
+        if (QuestSub)
+        {
+            bHasActiveQuest = QuestSub->ActiveQuests.Num() > 0;
+        }
+
+        AutoMoveButton->SetVisibility(bHasActiveQuest ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+    }
+}
+
+// 자동이동 버튼 클릭 시 첫 번째 미완료 Hunt 목표 위치로 자동이동을 시작합니다.
+void UQuestLogWidget::OnAutoMoveClicked()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 버튼 클릭됨. CachedQuestComp: %s"),
+        CachedQuestComp ? TEXT("유효") : TEXT("null"));
+
+    if (CachedQuestComp)
+    {
+        CachedQuestComp->StartAutoMoveToHuntTarget();
+    }
 }

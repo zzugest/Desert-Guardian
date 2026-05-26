@@ -23,11 +23,13 @@
 #include "NPC/Quest/QuestComponent.h"
 #include "Enemy/Enemy.h"
 #include "MinimapSubsystem.h"
+#include "Net/UnrealNetwork.h"
 
 // 충돌 박스와 상호작용 프롬프트 위젯 컴포넌트를 생성합니다.
 AMapPortal::AMapPortal()
 {
     PrimaryActorTick.bCanEverTick = false;
+    bReplicates = true;
 
     CollisionBox = CreateDefaultSubobject<UBoxComponent>(TEXT("CollisionBox"));
     RootComponent = CollisionBox;
@@ -39,6 +41,18 @@ AMapPortal::AMapPortal()
     InteractPromptWidget->SetWidgetSpace(EWidgetSpace::Screen);
     InteractPromptWidget->SetDrawSize(FVector2D(150.f, 50.f));
     InteractPromptWidget->SetVisibility(false);
+}
+
+void AMapPortal::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+    Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+    DOREPLIFETIME(AMapPortal, bBossKilled);
+}
+
+// 서버에서 bBossKilled가 true로 설정되면 클라이언트에서 이 콜백이 호출됩니다.
+void AMapPortal::OnRep_bBossKilled()
+{
+    CheckAndApplyPortalState();
 }
 
 // Overlap 이벤트를 바인딩하고, 퀘스트 완료·보스 처치 델리게이트를 연결한 뒤 초기 활성화 상태를 결정합니다.
@@ -257,7 +271,7 @@ void AMapPortal::OnBossKilled(AEnemy* DeadEnemy)
     CheckAndApplyPortalState();
 }
 
-// 확인창 수락 콜백: 저장해둔 펜딩 데이터로 텔레포트를 실행합니다.
+// 확인창 수락 콜백: 저장해둔 펜딩 데이터로 해당 플레이어만 텔레포트를 실행합니다.
 void AMapPortal::OnConfirmAccepted()
 {
     AMyCharacter* PlayerChar = Cast<AMyCharacter>(UGameplayStatics::GetPlayerCharacter(GetWorld(), 0));

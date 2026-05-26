@@ -93,8 +93,10 @@ AEnemy::AEnemy()
 	NavInvoker = CreateDefaultSubobject<UNavigationInvokerComponent>(TEXT("NavInvoker"));
 	NavInvoker->SetGenerationRadii(1500.0f, 2000.0f);
 
+
 	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_GameTraceChannel2, ECR_Block);
 	GetMesh()->SetCollisionResponseToChannel(ECC_GameTraceChannel2, ECR_Block);
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
 
 	// 타겟팅 시 머리 위에 표시되는 마커 메시를 생성합니다.
 	TargetMarkerMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("TargetMarkerMesh"));
@@ -140,6 +142,8 @@ void AEnemy::BeginPlay()
 	{
 		GetCharacterMovement()->MaxWalkSpeed = Data->MoveSpeed;
 		OriginalMoveSpeed = Data->MoveSpeed;
+		GetCharacterMovement()->bUseRVOAvoidance = true;
+		GetCharacterMovement()->AvoidanceWeight  = 1.0f;
 	}
 
 	if (GetCapsuleComponent())
@@ -351,6 +355,19 @@ void AEnemy::MulticastPlayAttackMontage_Implementation(UAnimMontage* Montage)
 	if (Montage) PlayAnimMontage(Montage);
 }
 
+// 모든 클라이언트에서 각자의 QuestSubsystem에 처치 진행도를 반영합니다.
+void AEnemy::Multicast_UpdateQuestObjective_Implementation(EQuestTaskType TaskType, FName TargetRowName)
+{
+	UGameInstance* GameInst = GetWorld()->GetGameInstance();
+	if (!GameInst) return;
+
+	UQuestSubsystem* QuestSys = GameInst->GetSubsystem<UQuestSubsystem>();
+	if (QuestSys)
+	{
+		QuestSys->UpdateQuestObjective(TaskType, TargetRowName, 1);
+	}
+}
+
 // 공격 쿨다운이 끝나 다음 공격이 가능하도록 플래그를 복구합니다.
 void AEnemy::ResetAttack()
 {
@@ -362,6 +379,13 @@ void AEnemy::OnTargetDetected(AActor* Actor, FAIStimulus Stimulus)
 {
 	AMyCharacter* PlayerCharacter = Cast<AMyCharacter>(Actor);
 	if (!PlayerCharacter) return;
+
+	if (GetName().Contains(TEXT("NormalOrc_1_C_0")))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[DiagPerception] 플레이어 %s: %s"),
+			Stimulus.WasSuccessfullySensed() ? TEXT("감지") : TEXT("소실"),
+			*GetActorLocation().ToString());
+	}
 
 	AAIController* AIC = Cast<AAIController>(GetController());
 	if (!AIC) return;
@@ -390,15 +414,8 @@ void AEnemy::OnTargetDetected(AActor* Actor, FAIStimulus Stimulus)
 // 퀘스트 진행 업데이트 후 오브젝트 풀로 반환하고 OnMonsterDied 델리게이트를 브로드캐스트합니다.
 void AEnemy::Die()
 {
-	UGameInstance* GameInst = GetWorld()->GetGameInstance();
-	if (GameInst)
-	{
-		UQuestSubsystem* QuestSys = GameInst->GetSubsystem<UQuestSubsystem>();
-		if (QuestSys)
-		{
-			QuestSys->UpdateQuestObjective(EQuestTaskType::Hunt, EnemyRowName, 1);
-		}
-	}
+	// 모든 클라이언트의 QuestSubsystem에 처치 사실을 알립니다.
+	Multicast_UpdateQuestObjective(EQuestTaskType::Hunt, EnemyRowName);
 
 	// 스포너가 없는 적(보스 등 직접 배치)만 여기서 미니맵에서 제거합니다.
 	// 스포너가 있는 적은 HandleMonsterDeath에서 제거합니다.
@@ -502,6 +519,7 @@ void AEnemy::CheckLeash()
 	if (!bIsReturning && DistanceFromHome > LeashRadius)
 	{
 		// 리시 범위를 벗어나면 HP를 회복하고 귀환 모드로 전환합니다.
+		UE_LOG(LogTemp, Warning, TEXT("[Leash][%s] 귀환 시작 - 거리: %.1f"), *GetName(), DistanceFromHome);
 		bIsReturning = true;
 		CurrentHP    = MaxHP;
 

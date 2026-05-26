@@ -323,11 +323,18 @@ public:
     FTimerHandle ItemAttackBuffTimerHandle;
     void RemoveItemAttackBuff();
 
+    // 아이템 버프 카운트다운을 클라이언트 로컬에서 관리합니다. 서버 시간과 무관합니다.
+    float ItemBuffClientEndTime = 0.0f;
+
     UPROPERTY()
     FName ActiveItemAttackBuffID;
 
     // bFromItem = true 이면 아이템 버프 경로, false 이면 스킬 버프 경로로 처리합니다.
     void ApplyAttackBuff(float Amount, float Duration, FName BuffID, bool bFromItem = false);
+
+    // 1초마다 실제 남은 버프 시간을 로그로 출력합니다.
+    void LogBuffStatus();
+    FTimerHandle BuffLogTimerHandle;
 
     // 서버에서 버프가 추가·제거될 때마다 클라이언트로 복제되는 활성 버프 목록입니다.
     // 어떤 버프 종류든 이 배열에 추가하면 자동으로 클라이언트 위젯에 반영됩니다.
@@ -339,4 +346,10 @@ public:
 
     // 지정 위치에 히트 이펙트를 스폰합니다. (서버에서 클라이언트 히트 보고를 받았을 때 호출)
     void SpawnHitEffectAt(FVector HitLocation, FRotator HitNormal);
+
+    // 클라이언트가 보고한 히트를 서버에서 처리합니다. AttackID로 데미지를 재계산해 신뢰성을 유지합니다.
+    void ServerApplyHitDamage(AActor* HitEnemy, FVector HitLocation, FRotator HitNormal, FName AttackID);
+
+    // 클라이언트가 보고한 마법 AoE 히트를 서버에서 처리합니다. MagicAttackID로 데미지를 재계산합니다.
+    void ServerApplyMagicDamage(const TArray<AActor*>& HitEnemies, FName MagicAttackID);
 };

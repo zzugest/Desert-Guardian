@@ -62,6 +62,8 @@
 #include "MapPortal.h"
 #include "Blueprint/UserWidget.h"
 #include "Net/UnrealNetwork.h"
+#include "AutoMoveComponent.h"
+#include "NavigationInvokerComponent.h"
 
 // 복제할 변수를 등록합니다.
 void AMyCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -116,6 +118,10 @@ AMyCharacter::AMyCharacter()
     TargetingComp = CreateDefaultSubobject<UTargetingComponent>(TEXT("TargetingComponent"));
     MinimapComp   = CreateDefaultSubobject<UMinimapComponent>(TEXT("MinimapComp"));
     InventoryComp = CreateDefaultSubobject<UInventoryComponent>(TEXT("InventoryComp"));
+    AutoMoveComp  = CreateDefaultSubobject<UAutoMoveComponent>(TEXT("AutoMoveComp"));
+
+    UNavigationInvokerComponent* NavInvoker = CreateDefaultSubobject<UNavigationInvokerComponent>(TEXT("NavInvoker"));
+    NavInvoker->SetGenerationRadii(5000.0f, 6000.0f);
 }
 
 // 게임 시작 시 입력 매핑, HUDRoot(통합 HUD) 생성, 인벤토리 위젯 및 서브시스템 이벤트 연결을 수행합니다.
@@ -306,12 +312,19 @@ void AMyCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
         EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Started,   this, &AMyCharacter::StartSprint);
         EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Completed, this, &AMyCharacter::StopSprint);
     }
+
+    if (ShowCursorAction)
+    {
+        EnhancedInputComponent->BindAction(ShowCursorAction, ETriggerEvent::Started,   this, &AMyCharacter::OnShowCursorPressed);
+        EnhancedInputComponent->BindAction(ShowCursorAction, ETriggerEvent::Completed, this, &AMyCharacter::OnShowCursorReleased);
+    }
 }
 
 // 좌클릭 공격 입력 시 타겟 방향을 계산해 서버에 공격을 요청합니다.
 void AMyCharacter::Attack(const FInputActionValue& Value)
 {
     if (!CombatComp) return;
+    if (AutoMoveComp) AutoMoveComp->StopAutoMove();
 
     // 타겟이 있으면 그 방향, 없으면 현재 방향 그대로 전달합니다.
     FRotator SnapRotation = GetActorRotation();
@@ -411,6 +424,94 @@ void AMyCharacter::OnPortalLevelLoaded()
 // 이전 서브레벨 언로드 완료 콜백: 현재는 별도 처리 없음.
 void AMyCharacter::OnPortalUnloadComplete()
 {
+}
+
+// 서버에서 실행: 같은 존(SourceZoneName)에 있는 플레이어 전원을 목적지로 이동시킵니다.
+// TargetSubLevelName이 None이면 위치만 이동(SameLevelTeleport), 아니면 서브레벨을 먼저 로드합니다.
+void AMyCharacter::Server_RequestGroupPortalTravel_Implementation(FName TargetSubLevelName, FName UnloadSubLevelName, FName SourceZoneName, FVector Dest, FRotator Rot)
+{
+    PendingGroupTargetSub  = TargetSubLevelName;
+    PendingGroupUnloadSub  = UnloadSubLevelName;
+    PendingGroupSourceZone = SourceZoneName;
+    PendingGroupLocation   = Dest;
+    PendingGroupRotation   = Rot;
+
+    if (TargetSubLevelName.IsNone())
+    {
+        // 같은 서브레벨 내 이동: 바로 전원 텔레포트합니다.
+        OnGroupPortalLevelLoaded();
+        return;
+    }
+
+    FLatentActionInfo LatentInfo;
+    LatentInfo.CallbackTarget    = this;
+    LatentInfo.ExecutionFunction = FName("OnGroupPortalLevelLoaded");
+    LatentInfo.UUID              = 7705;
+    LatentInfo.Linkage           = 0;
+    UGameplayStatics::LoadStreamLevel(this, TargetSubLevelName, true, false, LatentInfo);
+}
+
+// 그룹 이동용 서브레벨 로드 완료 콜백: 같은 존의 플레이어 전원을 텔레포트합니다.
+void AMyCharacter::OnGroupPortalLevelLoaded()
+{
+    for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+    {
+        APlayerController* PC = It->Get();
+        if (!PC) continue;
+
+        AMyCharacter* OtherChar = Cast<AMyCharacter>(PC->GetPawn());
+        if (!OtherChar) continue;
+
+        // 같은 존에 있는 플레이어만 이동시킵니다.
+        if (OtherChar->CurrentZoneName != PendingGroupSourceZone) continue;
+
+        // 존 정보를 목적지로 업데이트합니다. (SameLevelTeleport는 None이므로 변경 없음)
+        if (!PendingGroupTargetSub.IsNone())
+        {
+            OtherChar->CurrentZoneName = PendingGroupTargetSub;
+        }
+
+        OtherChar->SetActorLocationAndRotation(PendingGroupLocation, PendingGroupRotation,
+            false, nullptr, ETeleportType::TeleportPhysics);
+
+        // 각 클라이언트의 로컬 화면에서 존 지오메트리를 교체합니다.
+        if (!PendingGroupTargetSub.IsNone() || !PendingGroupUnloadSub.IsNone())
+        {
+            OtherChar->Client_UpdateZoneStreaming(PendingGroupTargetSub, PendingGroupUnloadSub);
+        }
+    }
+
+    // 이전 서브레벨에 남은 플레이어가 없으면 언로드합니다.
+    if (!PendingGroupUnloadSub.IsNone())
+    {
+        int32 RemainingCount = 0;
+        for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+        {
+            APlayerController* PC = It->Get();
+            if (!PC) continue;
+            AMyCharacter* OtherChar = Cast<AMyCharacter>(PC->GetPawn());
+            if (OtherChar && OtherChar->CurrentZoneName == PendingGroupUnloadSub)
+            {
+                RemainingCount++;
+            }
+        }
+
+        if (RemainingCount == 0)
+        {
+            FLatentActionInfo LatentInfo;
+            LatentInfo.CallbackTarget    = this;
+            LatentInfo.ExecutionFunction = FName("OnPortalUnloadComplete");
+            LatentInfo.UUID              = 7706;
+            LatentInfo.Linkage           = 0;
+            UGameplayStatics::UnloadStreamLevel(this, PendingGroupUnloadSub, LatentInfo, false);
+        }
+    }
+
+    PendingGroupTargetSub  = NAME_None;
+    PendingGroupUnloadSub  = NAME_None;
+    PendingGroupSourceZone = NAME_None;
+    PendingGroupLocation   = FVector::ZeroVector;
+    PendingGroupRotation   = FRotator::ZeroRotator;
 }
 
 // 서버 → 해당 클라이언트 전용: 이 클라이언트 로컬에서만 존 지오메트리를 로드/언로드합니다.
@@ -758,9 +859,9 @@ void AMyCharacter::ProcessQuickSlot(int32 SlotIndex)
 }
 
 // Q / E / R 키 입력을 받아 SkillComponent의 해당 슬롯 스킬 시전을 시도합니다.
-void AMyCharacter::UseSkillQ(const FInputActionValue& Value) { if (SkillComp) SkillComp->TryCastSkill(0); }
-void AMyCharacter::UseSkillE(const FInputActionValue& Value) { if (SkillComp) SkillComp->TryCastSkill(1); }
-void AMyCharacter::UseSkillR(const FInputActionValue& Value) { if (SkillComp) SkillComp->TryCastSkill(2); }
+void AMyCharacter::UseSkillQ(const FInputActionValue& Value) { if (AutoMoveComp) AutoMoveComp->StopAutoMove(); if (SkillComp) SkillComp->TryCastSkill(0); }
+void AMyCharacter::UseSkillE(const FInputActionValue& Value) { if (AutoMoveComp) AutoMoveComp->StopAutoMove(); if (SkillComp) SkillComp->TryCastSkill(1); }
+void AMyCharacter::UseSkillR(const FInputActionValue& Value) { if (AutoMoveComp) AutoMoveComp->StopAutoMove(); if (SkillComp) SkillComp->TryCastSkill(2); }
 
 // GameplayTag 컨테이너에 상태 태그를 추가 / 제거 / 확인합니다.
 void AMyCharacter::AddStateTag(FName TagName)  { ActionTags.AddTag(FGameplayTag::RequestGameplayTag(TagName)); }
@@ -1105,17 +1206,44 @@ void AMyCharacter::OnRollMontageEnded(UAnimMontage* Montage, bool bInterrupted)
     RemoveStateTag("State.Action.Rolling");
 }
 
-// 서버에서 실행: 클라이언트가 전달한 히트 위치에 이펙트를 스폰합니다.
-// 공중 공격 시 서버의 SimulatedProxy 위치 오차로 WeaponTrace가 빗나가는 경우를 보정합니다.
-void AMyCharacter::ServerReportWeaponHit_Implementation(FVector HitLocation, FRotator HitNormal)
+// 서버에서 실행: 클라이언트가 보고한 히트 액터에 데미지를 적용하고 이펙트를 스폰합니다.
+void AMyCharacter::Server_ReportHitEnemy_Implementation(AActor* HitEnemy, FVector HitLocation, FRotator HitNormal, FName AttackID)
 {
     if (!CombatComp) return;
-    CombatComp->SpawnHitEffectAt(HitLocation, HitNormal);
+    CombatComp->ServerApplyHitDamage(HitEnemy, HitLocation, HitNormal, AttackID);
+}
+
+// 서버에서 실행: 클라이언트가 보고한 마법 AoE 히트 목록에 데미지를 적용합니다.
+void AMyCharacter::Server_ReportMagicHit_Implementation(const TArray<AActor*>& HitEnemies, FName MagicAttackID)
+{
+    if (!CombatComp) return;
+    CombatComp->ServerApplyMagicDamage(HitEnemies, MagicAttackID);
+}
+
+// Ctrl 키를 누르는 동안 마우스 커서를 보여주고 게임+UI 복합 입력 모드로 전환합니다.
+void AMyCharacter::OnShowCursorPressed(const FInputActionValue& Value)
+{
+    APlayerController* PC = Cast<APlayerController>(GetController());
+    if (!PC) return;
+
+    PC->bShowMouseCursor = true;
+    PC->SetInputMode(FInputModeUIOnly());
+}
+
+// Ctrl 키를 떼면 마우스 커서를 숨기고 게임 전용 입력 모드로 복원합니다.
+void AMyCharacter::OnShowCursorReleased(const FInputActionValue& Value)
+{
+    APlayerController* PC = Cast<APlayerController>(GetController());
+    if (!PC) return;
+
+    PC->bShowMouseCursor = false;
+    PC->SetInputMode(FInputModeGameOnly());
 }
 
 // 우클릭 마법 공격 입력 시 로컬 타겟을 파라미터로 담아 서버에 마법 공격을 요청합니다.
 void AMyCharacter::MagicAttack()
 {
+    if (AutoMoveComp) AutoMoveComp->StopAutoMove();
     if (CombatComp)
     {
         if (HasStateTag("State.Action.Rolling")) return;

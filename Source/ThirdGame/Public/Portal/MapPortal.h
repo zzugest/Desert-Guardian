@@ -18,6 +18,8 @@ class THIRDGAME_API AMapPortal : public AActor
 public:
 	AMapPortal();
 
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
 	UFUNCTION(BlueprintCallable, Category = "Portal")
 	void InteractWithPortal(class AMyCharacter* PlayerCharacter);
 
@@ -50,7 +52,12 @@ protected:
 	void OnConfirmAccepted();
 
 private:
+	// 보스 처치 여부 — 서버에서 true로 설정되면 클라이언트에 복제되어 포탈을 활성화합니다.
+	UPROPERTY(ReplicatedUsing=OnRep_bBossKilled)
 	bool bBossKilled = false;
+
+	UFUNCTION()
+	void OnRep_bBossKilled();
 
 	// 확인창 표시 후 수락 시 사용할 이동 데이터
 	FName    PendingTargetSubLevelName;

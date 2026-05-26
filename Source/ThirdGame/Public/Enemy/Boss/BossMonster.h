@@ -16,6 +16,40 @@ class THIRDGAME_API ABossMonster : public AEnemy
 public:
 	ABossMonster();
 
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	// ── Rep 콜백 ──────────────────────────────────────────────────────────
+	UFUNCTION()
+	void OnRep_bIsRagePhase();
+
+	UFUNCTION()
+	void OnRep_bIsJumpAttacking();
+
+	// ── Multicast RPC ──────────────────────────────────────────────────────
+	// 보스 최초 감지 시 모든 클라이언트에 HP 바를 표시합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_ShowBossUI();
+
+	// 2페이즈 진입 시 변신 몽타주·HP 바를 모든 클라이언트에 동기화합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_EnterRagePhase();
+
+	// 보스 HP가 변경될 때마다 모든 클라이언트의 HP 바를 갱신합니다.
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_UpdateBossHP(float NewHP, float NewMaxHP);
+
+	// 변신 애니메이션 완료 후 이름과 HP를 모든 클라이언트에 갱신합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_OnRageComplete(float NewHP, float NewMaxHP);
+
+	// 점프 공격 경고 데칼을 모든 클라이언트에 스폰합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_SpawnWarningDecal(FVector DecalLocation);
+
+	// 착지 후 경고 데칼을 모든 클라이언트에서 제거합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_RemoveWarningDecal();
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -51,7 +85,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boss|Sound")
 	USoundBase* BossBGM;
 
-	UPROPERTY(BlueprintReadWrite, Category = "Boss|State")
+	UPROPERTY(ReplicatedUsing=OnRep_bIsRagePhase, BlueprintReadWrite, Category = "Boss|State")
 	bool bIsRagePhase = false;
 
 	void CheckPhaseTransition();
@@ -112,9 +146,9 @@ protected:
 	UFUNCTION()
 	void OnAttackMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "Boss|State")
+	UPROPERTY(Replicated, VisibleAnywhere, BlueprintReadWrite, Category = "Boss|State")
 	bool bIsInvincible = false;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "Boss|State")
+	UPROPERTY(ReplicatedUsing=OnRep_bIsJumpAttacking, VisibleAnywhere, BlueprintReadWrite, Category = "Boss|State")
 	bool bIsJumpAttacking = false;
 };

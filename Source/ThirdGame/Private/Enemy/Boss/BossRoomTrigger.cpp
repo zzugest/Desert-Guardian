@@ -40,7 +40,7 @@ void ABossRoomTrigger::OnOverlapBegin(UPrimitiveComponent* OverlappedComp, AActo
 	if (bHasPlayed || !BossIntroSequence) return;
 
 	ACharacter* PlayerChar = Cast<ACharacter>(OtherActor);
-	if (PlayerChar && PlayerChar->IsPlayerControlled())
+	if (PlayerChar && PlayerChar->IsLocallyControlled())
 	{
 		bHasPlayed = true;
 

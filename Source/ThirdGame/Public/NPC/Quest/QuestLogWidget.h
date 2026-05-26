@@ -7,9 +7,10 @@
 #include "QuestLogWidget.generated.h"
 
 
-// ���� ����
+// 전방 선언
 class UTextBlock;
-class UBorder;
+class UVerticalBox;
+class UButton;
 class UQuestComponent;
 
 /**
@@ -34,12 +35,20 @@ public:
     UPROPERTY(meta = (BindWidget))
     class URichTextBlock* QuestListText;
 
-    // 퀘스트 텍스트 뒤에 깔리는 반투명 배경 Border
+    // 퀘스트 텍스트와 자동이동 버튼을 세로로 묶는 컨테이너입니다.
     UPROPERTY(meta = (BindWidget))
-    UBorder* QuestBackground;
+    UVerticalBox* QuestBackground;
+
+    // 클릭하면 현재 Hunt 퀘스트 목표 위치로 자동이동을 시작하는 버튼입니다.
+    UPROPERTY(meta = (BindWidget))
+    UButton* AutoMoveButton;
+
+    // 자동이동 버튼 클릭 콜백입니다.
+    UFUNCTION()
+    void OnAutoMoveClicked();
 
 private:
-    // �� ĳ������ ����Ʈ ���� �����͸� ����� �� ����
+    // 이 캐릭터의 퀘스트 컴포넌트를 캐시합니다.
     UPROPERTY()
     UQuestComponent* CachedQuestComp;
 };
