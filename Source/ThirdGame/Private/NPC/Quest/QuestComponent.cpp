@@ -18,6 +18,8 @@
 #include "MyCharacter.h"
 #include "AutoMoveComponent.h"
 #include "NPC/Quest/AutoMoveTargetData.h"
+#include "NPC/Quest/LevelConnectionData.h"
+#include "Portal/MapPortal.h"
 #include "Kismet/GameplayStatics.h"
 
 UQuestComponent::UQuestComponent()
@@ -348,14 +350,135 @@ void UQuestComponent::StartAutoMoveToHuntTarget()
 
         if (!ActiveQuest.bIsReadyToComplete)
         {
-            // 사냥 단계: DataTable에 입력된 HuntTargetLocation으로 이동합니다.
-            if (!TargetData->HuntTargetLocation.IsZero())
+            // 사냥 단계: 목표 레벨과 현재 레벨을 비교해 이동 방법을 결정합니다.
+            const FName TargetLevel  = TargetData->HuntTargetLevelName;
+            const FName CurrentLevel = MyChar->CurrentZoneName;
+
+            // 목표 레벨이 없거나 현재 레벨과 같으면 기존 방식으로 이동합니다.
+            if (TargetLevel.IsNone() || TargetLevel == CurrentLevel)
             {
-                UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 사냥 목적지로 이동: %s"), *TargetData->HuntTargetLocation.ToString());
-                MyChar->AutoMoveComp->StartAutoMove(TargetData->HuntTargetLocation);
-                return;
+                UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 레벨 판별: 같은 레벨 → 현재=[%s] / 목표=[%s]"),
+                    *CurrentLevel.ToString(), TargetLevel.IsNone() ? TEXT("None(같은레벨)") : *TargetLevel.ToString());
+
+                if (!TargetData->HuntTargetLocation.IsZero())
+                {
+                    UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 사냥 목적지로 이동: %s"), *TargetData->HuntTargetLocation.ToString());
+                    MyChar->AutoMoveComp->StartAutoMove(TargetData->HuntTargetLocation);
+                    return;
+                }
+                UE_LOG(LogTemp, Warning, TEXT("[AutoMove] HuntTargetLocation이 (0,0,0)입니다. DataTable을 확인하세요."));
             }
-            UE_LOG(LogTemp, Warning, TEXT("[AutoMove] HuntTargetLocation이 (0,0,0)입니다. DataTable을 확인하세요."));
+            else
+            {
+                // 다른 레벨이면 BFS로 최단 경로를 탐색하고 첫 번째 포탈로 이동합니다.
+                UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 레벨 판별: 다른 레벨 → 현재=[%s] / 목표=[%s] — BFS 탐색 시작"),
+                    *CurrentLevel.ToString(), *TargetLevel.ToString());
+
+                if (!LevelGraphTable)
+                {
+                    UE_LOG(LogTemp, Warning, TEXT("[AutoMove] LevelGraphTable이 설정되지 않았습니다"));
+                    return;
+                }
+
+                // ── BFS: CurrentLevel → TargetLevel 최단 경로 탐색 ──────────────────
+                // visited: 방문한 레벨, parent: 경로 역추적용 부모 맵
+                TMap<FName, FName> Parent;
+                TQueue<FName>      Queue;
+                TSet<FName>        Visited;
+
+                Queue.Enqueue(CurrentLevel);
+                Visited.Add(CurrentLevel);
+                Parent.Add(CurrentLevel, FName("__ROOT__"));
+
+                TArray<FLevelConnectionData*> AllEdges;
+                LevelGraphTable->GetAllRows<FLevelConnectionData>(TEXT("BFS"), AllEdges);
+
+                bool bFound = false;
+                while (!Queue.IsEmpty())
+                {
+                    FName Current;
+                    Queue.Dequeue(Current);
+
+                    if (Current == TargetLevel)
+                    {
+                        bFound = true;
+                        break;
+                    }
+
+                    for (FLevelConnectionData* Edge : AllEdges)
+                    {
+                        if (!Edge) continue;
+                        if (Edge->FromLevel == Current && !Visited.Contains(Edge->ToLevel))
+                        {
+                            Visited.Add(Edge->ToLevel);
+                            Parent.Add(Edge->ToLevel, Current);
+                            Queue.Enqueue(Edge->ToLevel);
+                        }
+                    }
+                }
+
+                if (!bFound)
+                {
+                    UE_LOG(LogTemp, Warning, TEXT("[AutoMove] BFS: [%s] → [%s] 경로를 찾지 못했습니다. LevelGraphTable을 확인하세요."),
+                        *CurrentLevel.ToString(), *TargetLevel.ToString());
+                    return;
+                }
+
+                // 역추적: TargetLevel부터 거슬러 올라가 전체 경로를 구성합니다.
+                TArray<FName> FullPath;
+                FName Step = TargetLevel;
+                while (Step != FName("__ROOT__"))
+                {
+                    FullPath.Insert(Step, 0);
+                    const FName* ParentPtr = Parent.Find(Step);
+                    if (!ParentPtr) break;
+                    Step = *ParentPtr;
+                }
+
+                // 전체 경로를 순서대로 로그로 출력합니다.
+                FString PathStr;
+                for (int32 i = 0; i < FullPath.Num(); ++i)
+                {
+                    PathStr += FullPath[i].ToString();
+                    if (i < FullPath.Num() - 1) PathStr += TEXT(" → ");
+                }
+                UE_LOG(LogTemp, Warning, TEXT("[AutoMove] BFS 최적 경로: %s"), *PathStr);
+                for (int32 i = 0; i < FullPath.Num(); ++i)
+                {
+                    UE_LOG(LogTemp, Warning, TEXT("[AutoMove]   [%d] %s"), i + 1, *FullPath[i].ToString());
+                }
+
+                // CurrentLevel 바로 다음 레벨(첫 번째 이동 목표)을 구합니다.
+                FName NextLevel = TargetLevel;
+                while (Parent.FindRef(NextLevel) != CurrentLevel)
+                {
+                    NextLevel = Parent.FindRef(NextLevel);
+                }
+
+                UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 첫 번째 이동 목표 레벨: [%s] → 해당 포탈 탐색 중..."), *NextLevel.ToString());
+
+                // 현재 레벨에서 NextLevel로 향하는 포탈을 검색합니다.
+                TArray<AActor*> PortalActors;
+                UGameplayStatics::GetAllActorsOfClass(GetWorld(), AMapPortal::StaticClass(), PortalActors);
+
+                for (AActor* Actor : PortalActors)
+                {
+                    AMapPortal* Portal = Cast<AMapPortal>(Actor);
+                    if (!Portal) continue;
+
+                    if (Portal->GetCurrentSubLevelName() != CurrentLevel) continue;
+
+                    FName PortalTargetLevel = Portal->GetTargetSubLevelName();
+                    if (PortalTargetLevel == NextLevel)
+                    {
+                        UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 포탈 발견 → 위치: %s"), *Portal->GetActorLocation().ToString());
+                        MyChar->AutoMoveComp->StartAutoMove(Portal->GetActorLocation());
+                        return;
+                    }
+                }
+
+                UE_LOG(LogTemp, Warning, TEXT("[AutoMove] [%s]로 가는 포탈을 현재 레벨에서 찾지 못했습니다."), *NextLevel.ToString());
+            }
         }
         else
         {

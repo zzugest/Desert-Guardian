@@ -5,6 +5,7 @@
 #include "AutoMoveComponent.generated.h"
 
 class UDecalComponent;
+class AEnemy;
 
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class THIRDGAME_API UAutoMoveComponent : public UActorComponent
@@ -23,6 +24,10 @@ public:
 	// 자동이동을 중단하고 경로 데칼을 모두 제거합니다.
 	UFUNCTION(BlueprintCallable, Category = "AutoMove")
 	void StopAutoMove();
+
+	// 플레이어 입력으로 자동이동을 취소하고 취소 경고 메시지를 화면에 표시합니다.
+	UFUNCTION(BlueprintCallable, Category = "AutoMove")
+	void CancelAutoMove();
 
 	// 현재 자동이동 중인지 여부입니다.
 	UPROPERTY(BlueprintReadOnly, Category = "AutoMove")
@@ -51,6 +56,22 @@ public:
 	// 제자리 판정 기준 거리(유닛). 1초 동안 이 거리 미만으로 이동하면 제자리로 봅니다.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AutoMove|Movement")
 	float StuckDistanceThreshold = 30.0f;
+
+	// 목적지까지 이 거리 이하가 되면 적 우회 스캔을 비활성화합니다.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AutoMove|Avoidance")
+	float ArrivalAvoidanceDisableRadius = 300.f;
+
+	// 전방 적 탐지 스캔 주기(초)입니다.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AutoMove|Avoidance")
+	float AvoidanceScanInterval = 0.3f;
+
+	// 전방 탐지 거리(유닛)입니다.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AutoMove|Avoidance")
+	float DetourScanRange = 600.f;
+
+	// 적 캡슐 반경에 곱해 회피 반경을 구하는 배수입니다.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AutoMove|Avoidance")
+	float EnemyAvoidanceMultiplier = 2.5f;
 
 protected:
 	virtual void BeginPlay() override;
@@ -81,6 +102,28 @@ private:
 
 	// 1초 주기 경로 재계산 타이머 핸들입니다.
 	FTimerHandle RecalcTimerHandle;
+
+	// 자동이동 중 Sprint 상태 여부입니다.
+	bool bAutoMoveSprinting = false;
+
+	// 현재 우회 중인지 여부입니다.
+	bool bIsDetouring = false;
+
+	// 우회 목표 경유지입니다.
+	FVector DetourWaypoint = FVector::ZeroVector;
+
+	// 자동이동 시작 시 이미 겹쳐 있던 적의 무시 목록입니다.
+	UPROPERTY()
+	TArray<AActor*> IgnoredEnemies;
+
+	// 스캔 간격 누산기입니다.
+	float AvoidanceScanAccumulator = 0.0f;
+
+	// 전방 적을 탐지해 우회 경유지를 설정합니다.
+	void CheckAndDetour();
+
+	// 적 위치 기준 좌/우 경유지를 계산하고 NavMesh에 투영합니다.
+	bool ComputeDetourPoint(FVector EnemyPos, float AvoidRadius, FVector& OutPoint);
 
 	// NavMesh로 경로를 재계산하고 경로 데칼을 갱신합니다.
 	void RecalcPath();

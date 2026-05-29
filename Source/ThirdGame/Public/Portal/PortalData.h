@@ -21,10 +21,6 @@ struct FPortalData : public FTableRowBase
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Portal Data")
 	EPortalType PortalType = EPortalType::LevelTransition;
 
-	// 1. 시스템이 사용할 목적지 레벨 이름 (LevelTransition 전용, 예: "Level_Dungeon_01")
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Portal Data")
-	FName TargetLevelName = TEXT("None");
-
 	// 2. UI에 표시할 한국어 맵 이름 (예: "어둠의 숲 던전 1층")
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Portal Data")
 	FString LevelKoreaName = TEXT("None");

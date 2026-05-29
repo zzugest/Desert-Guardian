@@ -34,6 +34,7 @@ void ABossMonster::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ABossMonster, bIsRagePhase);
 	DOREPLIFETIME(ABossMonster, bIsInvincible);
 	DOREPLIFETIME(ABossMonster, bIsJumpAttacking);
+	DOREPLIFETIME(ABossMonster, CachedImpactLocation);
 }
 
 // 보스 전용 초기화 — 부모(AEnemy) 기본값을 유지합니다.
@@ -370,6 +371,30 @@ void ABossMonster::Die()
 	Super::Die();
 }
 
+// 회전 몽타주를 모든 클라이언트에서 재생합니다. 종료 델리게이트는 서버(BTTask)에서 따로 바인딩합니다.
+void ABossMonster::Multicast_PlayTurnMontage_Implementation(UAnimMontage* Montage)
+{
+	if (!Montage) return;
+	PlayAnimMontage(Montage);
+}
+
+// 점프 공격 몽타주를 지정 섹션부터 모든 클라이언트에서 재생합니다.
+void ABossMonster::Multicast_PlayJumpAttackMontage_Implementation(UAnimMontage* Montage, FName SectionName)
+{
+	if (!Montage) return;
+	PlayAnimMontage(Montage, 1.0f, SectionName);
+}
+
+// 모든 클라이언트에서 점프 공격 몽타주를 LandSmash 섹션으로 전환합니다.
+void ABossMonster::Multicast_JumpToLandSmash_Implementation()
+{
+	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
+	if (AnimInstance && JumpAttackMontage)
+	{
+		AnimInstance->Montage_JumpToSection(FName("LandSmash"), JumpAttackMontage);
+	}
+}
+
 // 보스는 리시 시스템을 사용하지 않으므로 비어있습니다.
 void ABossMonster::CheckLeash()
 {
@@ -403,10 +428,10 @@ void ABossMonster::ExecuteJumpAttack()
 	bIsJumpAttacking = true;
 	bCanAttack       = false;
 
-	// JumpStart 섹션부터 몽타주를 재생합니다.
-	PlayAnimMontage(JumpAttackMontage, 1.0f, FName("JumpStart"));
+	// 모든 클라이언트에 JumpStart 섹션부터 몽타주를 동기화합니다.
+	Multicast_PlayJumpAttackMontage(JumpAttackMontage, FName("JumpStart"));
 
-	// 몽타주 종료 시 bCanAttack을 복구합니다.
+	// 몽타주 종료 콜백은 서버에서만 바인딩합니다.
 	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
 	if (AnimInstance)
 	{
@@ -419,25 +444,29 @@ void ABossMonster::ExecuteJumpAttack()
 // 물리 발사: 플레이어 방향으로 보스를 LaunchCharacter하고 경고 데칼을 스폰합니다.
 void ABossMonster::LaunchToAir()
 {
+	// 서버에서만 실행합니다. 클라이언트 AnimBP에서 호출되더라도 중복 실행을 방지합니다.
+	if (!HasAuthority()) return;
+
 	GetCharacterMovement()->SetMovementMode(MOVE_Falling);
 	GetCharacterMovement()->GravityScale = 1.0f;
 
-	ACharacter* Player = UGameplayStatics::GetPlayerCharacter(this, 0);
+	// BB의 TargetPlayer를 우선 사용하고, 없으면 인덱스 0번으로 폴백합니다.
+	ACharacter* Player = nullptr;
+	AAIController* AIC = Cast<AAIController>(GetController());
+	if (AIC && AIC->GetBlackboardComponent())
+	{
+		Player = Cast<ACharacter>(AIC->GetBlackboardComponent()->GetValueAsObject(TEXT("TargetPlayer")));
+	}
+	if (!Player)
+	{
+		Player = UGameplayStatics::GetPlayerCharacter(this, 0);
+	}
 	if (!Player) return;
 
 	FVector BossLoc   = GetActorLocation();
 	FVector PlayerLoc = Player->GetActorLocation();
 
-	// 무기 Tip 소켓이 플레이어 발밑에 착지하도록 Root 목표 위치를 보정합니다.
-	FVector AdjustedPlayerLoc = PlayerLoc;
-	if (WeaponMesh)
-	{
-		FVector TipLoc    = WeaponMesh->GetSocketLocation(TEXT("Tip"));
-		FVector TipOffset = FVector(TipLoc.X - BossLoc.X, TipLoc.Y - BossLoc.Y, 0.f);
-		AdjustedPlayerLoc -= TipOffset;
-	}
-
-	FVector ToPlayer = AdjustedPlayerLoc - BossLoc;
+	FVector ToPlayer = PlayerLoc - BossLoc;
 	ToPlayer.Z = 0.f;
 	float Distance = ToPlayer.Size();
 	ToPlayer.Normalize();
@@ -464,6 +493,8 @@ void ABossMonster::LaunchToAir()
 			DecalLocation = GroundHit.ImpactPoint;
 		}
 
+		// 히트 기준 위치를 캐싱합니다. 데칼이 제거된 후에도 AN_GroundSlam에서 사용됩니다.
+		CachedImpactLocation = DecalLocation;
 		Multicast_SpawnWarningDecal(DecalLocation);
 	}
 }
@@ -478,16 +509,8 @@ void ABossMonster::Landed(const FHitResult& Hit)
 		bIsJumpAttacking = false;
 		GetCharacterMovement()->GravityScale = 1.0f;
 
-		UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
-		if (AnimInstance && JumpAttackMontage)
-		{
-			AnimInstance->Montage_JumpToSection(FName("LandSmash"), JumpAttackMontage);
-		}
-
-		// 서버에서만 Multicast를 호출해 모든 클라이언트의 데칼을 제거합니다.
-		if (HasAuthority())
-		{
-			Multicast_RemoveWarningDecal();
-		}
+		// 모든 클라이언트에 LandSmash 섹션 전환을 동기화합니다.
+		// 경고 데칼 제거는 AN_GroundSlam AnimNotify 내부에서 처리합니다.
+		Multicast_JumpToLandSmash();
 	}
 }

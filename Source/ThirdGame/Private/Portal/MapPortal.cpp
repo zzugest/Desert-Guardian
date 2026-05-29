@@ -264,6 +264,27 @@ void AMapPortal::EndPlay(const EEndPlayReason::Type EndPlayReason)
     Super::EndPlay(EndPlayReason);
 }
 
+// 이 포탈이 연결하는 목적지 서브레벨 이름을 반환합니다.
+FName AMapPortal::GetTargetSubLevelName() const
+{
+    if (!PortalDataTable || PortalRowName.IsNone()) return NAME_None;
+
+    FPortalData* PortalData = PortalDataTable->FindRow<FPortalData>(PortalRowName, TEXT("GetTargetSubLevelName"));
+    if (!PortalData) return NAME_None;
+
+    return PortalData->TargetSubLevelName;
+}
+
+FName AMapPortal::GetCurrentSubLevelName() const
+{
+    if (!PortalDataTable || PortalRowName.IsNone()) return NAME_None;
+
+    FPortalData* PortalData = PortalDataTable->FindRow<FPortalData>(PortalRowName, TEXT("GetCurrentSubLevelName"));
+    if (!PortalData) return NAME_None;
+
+    return PortalData->CurrentSubLevelName;
+}
+
 // 보스 처치 델리게이트 콜백: 보스 사망 플래그를 세우고 포탈 상태를 재검사합니다.
 void AMapPortal::OnBossKilled(AEnemy* DeadEnemy)
 {

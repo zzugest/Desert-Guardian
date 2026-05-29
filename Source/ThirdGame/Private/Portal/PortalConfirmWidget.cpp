@@ -33,9 +33,6 @@ void UPortalConfirmWidget::NativeConstruct()
 // 목적지 이름을 캐시하고, 확인 텍스트를 "○○(으)로 이동하시겠습니까?" 형식으로 설정합니다.
 void UPortalConfirmWidget::InitConfirmUI(const FPortalData& PortalData)
 {
-    // 수락 시 OpenLevel에 사용할 레벨 이름을 미리 저장해둡니다.
-    SavedMapName = PortalData.TargetLevelName;
-
     if (Text_Question)
     {
         FString QuestionStr = PortalData.LevelKoreaName + TEXT("(으)로 이동하시겠습니까?");

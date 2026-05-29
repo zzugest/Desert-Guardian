@@ -95,4 +95,8 @@ public:
 	// 퀘스트 자동이동 목적지 테이블 (Row 키 = 퀘스트 RowName)
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Quest")
 	UDataTable* AutoMoveTargetTable;
+
+	// 레벨 간 연결 관계를 정의하는 테이블 (BFS 경로 탐색에 사용)
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Quest")
+	UDataTable* LevelGraphTable;
 };

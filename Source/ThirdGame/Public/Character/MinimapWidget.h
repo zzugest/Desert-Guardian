@@ -14,6 +14,7 @@
 #include "MinimapWidget.generated.h"
 
 class UTextureRenderTarget2D;
+class AMyCharacter;
 
 UCLASS()
 class THIRDGAME_API UMinimapWidget : public UUserWidget

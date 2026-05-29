@@ -11,6 +11,8 @@
 #include "Kismet/GameplayStatics.h"
 #include "GameWidgetBase.h"
 #include "Framework/Application/SlateApplication.h"
+#include "MyCharacter.h"
+#include "AutoMoveComponent.h"
 
 // 새로운 UI가 화면에 표시될 때 열린 목록에 등록하고 입력 모드를 갱신합니다.
 void UUISubsystem::ReportUIOpened(UUserWidget* Widget)
@@ -44,6 +46,9 @@ void UUISubsystem::UpdateInputMode()
         PC->SetInputMode(InputMode);
         PC->SetShowMouseCursor(false);
         PC->SetIgnoreMoveInput(false);
+
+        AMyCharacter* MyChar = Cast<AMyCharacter>(UGameplayStatics::GetPlayerCharacter(GetWorld(), 0));
+        if (MyChar) MyChar->RemoveStateTag("Block.AutoMove.UI");
         return;
     }
 
@@ -78,12 +83,24 @@ void UUISubsystem::UpdateInputMode()
     // 레벨이나 레이아웃 변화 후 누적된 이동 차단 카운터를 초기화하여 오작동을 방지합니다.
     PC->ResetIgnoreMoveInput();
 
+    AMyCharacter* MyChar = Cast<AMyCharacter>(UGameplayStatics::GetPlayerCharacter(GetWorld(), 0));
+
     if (bNeedBlockMove)
     {
         PC->SetIgnoreMoveInput(true); // 막아야 할 이동 입력이면 카운터 +1
+
+        // 이동이 차단되는 UI가 열릴 때 Block.AutoMove.UI 태그를 부여하고 자동이동도 함께 중단합니다.
+        if (MyChar)
+        {
+            MyChar->AddStateTag("Block.AutoMove.UI");
+            if (MyChar->AutoMoveComp) MyChar->AutoMoveComp->StopAutoMove();
+        }
     }
     else
     {
+        // 이동 차단 UI가 모두 닫히면 Block.AutoMove.UI 태그를 제거합니다.
+        if (MyChar) MyChar->RemoveStateTag("Block.AutoMove.UI");
+
         // 이동이 허용될 때 키보드 포커스가 게임 화면(Viewport)으로 되돌아오도록 복구합니다.
         FSlateApplication::Get().SetAllUserFocusToGameViewport();
     }

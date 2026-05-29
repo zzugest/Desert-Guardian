@@ -32,6 +32,8 @@ class UMinimapComponent;
 class UMinimapWidget;
 class UHUDRootWidget;
 class UAutoMoveComponent;
+class UCursorOptionComponent;
+class UPostProcessComponent;
 
 
 UCLASS()
@@ -74,6 +76,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Minimap")
 	UMinimapComponent* MinimapComp;
 
+	// 사망 시 화면을 흑백으로 만드는 포스트 프로세스 컴포넌트입니다.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Death")
+	UPostProcessComponent* DeathPostProcess;
+
 	// PlayerHUD와 MinimapWidget을 하나로 묶는 루트 HUD 위젯입니다.
 	// 에디터에서 WBP_HUDRoot 블루프린트를 할당합니다.
 	UPROPERTY(EditDefaultsOnly, Category = "UI")
@@ -111,6 +117,10 @@ public:
 	// NavMesh 경로 기반 자동이동을 처리하는 컴포넌트입니다.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Component")
 	UAutoMoveComponent* AutoMoveComp;
+
+	// Ctrl 키 기반 마우스 커서 표시/숨김을 처리하는 컴포넌트입니다.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Component")
+	UCursorOptionComponent* CursorOptionComp;
 
 	// =============================================================
 	// [�Է�] ���� �׼� (Enhanced Input)
@@ -414,15 +424,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
 	UInputAction* OpenSkillWindowAction;
 
-	// Ctrl 키를 누르는 동안 마우스 커서를 표시합니다.
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
-	UInputAction* ShowCursorAction;
-
-	// Ctrl 키를 누를 때 마우스 커서를 표시하고 UI 입력을 허용합니다.
-	void OnShowCursorPressed(const FInputActionValue& Value);
-
-	// Ctrl 키를 뗄 때 마우스 커서를 숨기고 게임 입력 전용 모드로 복원합니다.
-	void OnShowCursorReleased(const FInputActionValue& Value);
 
 	// ȭ�鿡 ǥ�õ� ��ų Ʈ�� ���� Ŭ�����Դϴ�.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI")
@@ -477,6 +478,86 @@ public:
 	// ȸ�� Ű�� ������ �� �ٴ��� ���� ���ϴ� �ִϸ��̼� ��Ÿ���Դϴ�.
 	UPROPERTY(EditAnywhere, Category = "Combat")
 	UAnimMontage* CombatRollMontage;
+
+	// 사망 시 재생할 애니메이션 몽타주입니다.
+	UPROPERTY(EditAnywhere, Category = "Combat")
+	UAnimMontage* DeathMontage;
+
+	// HitType.Knockback - 지상 방향별 피격 몽타주입니다.
+	UPROPERTY(EditAnywhere, Category = "Combat|HitReaction")
+	UAnimMontage* KnockbackFrontMontage;
+
+	UPROPERTY(EditAnywhere, Category = "Combat|HitReaction")
+	UAnimMontage* KnockbackBackMontage;
+
+	UPROPERTY(EditAnywhere, Category = "Combat|HitReaction")
+	UAnimMontage* KnockbackLeftMontage;
+
+	UPROPERTY(EditAnywhere, Category = "Combat|HitReaction")
+	UAnimMontage* KnockbackRightMontage;
+
+	// HitType.Launch - 강한 공격에 날아가는 피격 몽타주입니다. (지상 전용)
+	UPROPERTY(EditAnywhere, Category = "Combat|HitReaction")
+	UAnimMontage* LaunchMontage;
+
+	// HitType.Launch - 공중 피격 몽타주입니다. (Start/Loop/End 섹션으로 구성)
+	UPROPERTY(EditAnywhere, Category = "Combat|HitReaction")
+	UAnimMontage* AirLaunchMontage;
+
+	// 모든 클라이언트에서 캐릭터를 공격자 방향으로 회전시키고 Launch 몽타주를 재생합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_PlayLaunchReaction(FRotator FaceRotation);
+
+	// 모든 클라이언트에서 공중 Launch 몽타주 Start 섹션을 재생합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_PlayAirLaunchReaction(FRotator FaceRotation);
+
+	// 공중 Launch 몽타주 종료 콜백: AirLaunch 태그를 제거합니다.
+	UFUNCTION()
+	void OnAirLaunchMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	// HitType.Knockback - 공중 방향별 피격 몽타주입니다.
+	UPROPERTY(EditAnywhere, Category = "Combat|HitReaction")
+	UAnimMontage* AirKnockbackFrontMontage;
+
+	UPROPERTY(EditAnywhere, Category = "Combat|HitReaction")
+	UAnimMontage* AirKnockbackBackMontage;
+
+	UPROPERTY(EditAnywhere, Category = "Combat|HitReaction")
+	UAnimMontage* AirKnockbackLeftMontage;
+
+	UPROPERTY(EditAnywhere, Category = "Combat|HitReaction")
+	UAnimMontage* AirKnockbackRightMontage;
+
+	// 서버에서 히트 타입·방향·공중 여부를 계산한 뒤 모든 클라이언트에 히트 리액션 몽타주를 재생합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_PlayHitReaction(UAnimMontage* Montage, bool bIsAirHit);
+
+	// 히트 리액션 몽타주 종료 콜백: State.Action.HitReaction 태그를 제거합니다.
+	UFUNCTION()
+	void OnHitReactionMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	// 레벨별 부활 위치를 정의하는 DataTable입니다.
+	UPROPERTY(EditAnywhere, Category = "Combat")
+	UDataTable* RespawnDataTable;
+
+	// 캐릭터 사망 처리: State.Dead 태그 부여, 충돌 해제, 적 타겟 해제, 사망 몽타주 재생을 순서대로 실행합니다.
+	void Die();
+
+	// 사망 몽타주 종료 콜백: 서버에서만 Respawn()을 호출합니다.
+	UFUNCTION()
+	void OnDeathMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	// 부활 처리: HP 30 복구, 태그 제거, 충돌 복구, DataTable 기반 위치로 이동합니다.
+	void Respawn();
+
+	// 모든 클라이언트에 사망 몽타주를 재생하고 서버에서 종료 콜백을 등록합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_PlayDeathMontage();
+
+	// 모든 클라이언트에서 지정 위치로 이동하고 HUD를 갱신합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_Respawn(FVector Location, FRotator Rotation);
 
 	// �����Ⱑ ����Ǿ��� �� ȣ��Ǿ� �ڼ� �±� ���� ���½�ŵ�ϴ�.
 	UFUNCTION()

@@ -21,6 +21,8 @@
 #include "Rendering/DrawElements.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "MinimapSubsystem.h"
+#include "Character/MyCharacter.h"
+#include "Kismet/GameplayStatics.h"
 
 // MinimapSubsystem 포인터를 한 번만 캐싱합니다.
 void UMinimapWidget::NativeConstruct()
@@ -110,7 +112,19 @@ int32 UMinimapWidget::NativePaint(
 		}
 	}
 
-	// 플레이어 — 초록 점 (항상 미니맵 중앙, 최상위 레이어)
+	// 다른 플레이어 — 초록 점 (상대 위치로 표시)
+	TArray<AActor*> AllCharacters;
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AMyCharacter::StaticClass(), AllCharacters);
+	for (AActor* Actor : AllCharacters)
+	{
+		AMyCharacter* OtherChar = Cast<AMyCharacter>(Actor);
+		if (!OtherChar || OtherChar == Pawn) continue;
+
+		DrawDot(OutDrawElements, AllottedGeometry, Layer, MinimapOrigin,
+			WorldToMinimap(OtherChar->GetActorLocation(), PlayerPos), 8.f, FLinearColor::Green);
+	}
+
+	// 로컬 플레이어 — 초록 점 (항상 미니맵 중앙, 최상위 레이어)
 	DrawDot(OutDrawElements, AllottedGeometry, Layer, MinimapOrigin,
 		MinimapSize * 0.5f, 10.f, FLinearColor::Green);
 

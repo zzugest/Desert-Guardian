@@ -23,6 +23,10 @@ struct THIRDGAME_API FAutoMoveTargetData : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt")
     FVector HuntTargetLocation = FVector::ZeroVector;
 
+    // 사냥 목표가 있는 서브레벨 이름 (예: ZoneB). 현재 레벨과 같다면 NAME_None으로 두세요.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hunt")
+    FName HuntTargetLevelName = NAME_None;
+
     // 완료 보고 단계에서 찾을 NPC의 액터 태그 (레벨에서 태그로 검색)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Completion")
     FName CompletionNPCTag = NAME_None;

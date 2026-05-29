@@ -50,6 +50,18 @@ public:
 	UFUNCTION(NetMulticast, Reliable)
 	void Multicast_RemoveWarningDecal();
 
+	// 회전 몽타주를 모든 클라이언트에 동기화합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_PlayTurnMontage(UAnimMontage* Montage);
+
+	// 점프 공격 몽타주를 지정 섹션부터 모든 클라이언트에 동기화합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_PlayJumpAttackMontage(UAnimMontage* Montage, FName SectionName);
+
+	// 착지 시 모든 클라이언트에서 LandSmash 섹션으로 전환합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_JumpToLandSmash();
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -131,6 +143,10 @@ public:
 	// 현재 스폰된 경고 데칼 포인터
 	UPROPERTY()
 	UDecalComponent* WarningDecal = nullptr;
+
+	// 점프 공격 착지 히트 기준 위치 (데칼 스폰 시 캐싱, 데칼 제거 후에도 유효)
+	UPROPERTY(Replicated)
+	FVector CachedImpactLocation = FVector::ZeroVector;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boss|UI")
 	FString Phase1Name = TEXT("보스 기본 이름");

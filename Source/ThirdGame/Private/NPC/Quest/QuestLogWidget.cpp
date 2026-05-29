@@ -92,6 +92,7 @@ void UQuestLogWidget::UpdateQuestLog()
 // 자동이동 버튼 클릭 시 첫 번째 미완료 Hunt 목표 위치로 자동이동을 시작합니다.
 void UQuestLogWidget::OnAutoMoveClicked()
 {
+    UE_LOG(LogTemp, Warning, TEXT("[Cursor] 자동이동 버튼 OnClicked 호출됨"));
     UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 버튼 클릭됨. CachedQuestComp: %s"),
         CachedQuestComp ? TEXT("유효") : TEXT("null"));
 

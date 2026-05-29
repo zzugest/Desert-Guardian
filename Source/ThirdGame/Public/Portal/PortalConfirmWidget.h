@@ -47,7 +47,4 @@ protected:
 	UFUNCTION()
 	void OnDeclineClicked();
 
-private:
-	// "수락"을 눌렀을 때 이동하기 위해 목적지를 기억해둘 변수
-	FName SavedMapName;
 };

@@ -50,6 +50,7 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Animation")
 	FRotateMontages RotateMontages;
 
+
 	// 몽타주가 끝났을 때 자물쇠를 풀어줄 콜백 함수
 	UFUNCTION()
 	void OnTurnMontageEnded(UAnimMontage* Montage, bool bInterrupted);

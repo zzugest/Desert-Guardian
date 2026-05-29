@@ -12,6 +12,7 @@
 // =========================================================================================
 
 #include "AN_GroundSlam.h"
+#include "AnimNotify/AN_AttackBase.h"
 #include "NiagaraFunctionLibrary.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet/GameplayStatics.h"
@@ -37,39 +38,22 @@ void UAN_GroundSlam::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceBase*
 
 	FVector ActorLocation = OwnerActor->GetActorLocation();
 
-	// 경고 데칼이 있으면 그 위치를 XY 기준점으로 사용합니다.
-	// 없으면(일반 Enemy) 보스 루트 XY를 폴백으로 사용합니다.
+	// 캐싱된 히트 기준 위치를 그대로 사용합니다. (데칼 스폰 시 이미 지면 Z가 계산된 위치)
+	// 없으면(일반 Enemy 또는 미설정) 보스 발 높이를 폴백으로 사용합니다.
 	ABossMonster* Boss = Cast<ABossMonster>(OwnerActor);
-	FVector BaseXY = ActorLocation;
-	if (Boss && Boss->WarningDecal)
+	FVector ImpactLocation = ActorLocation;
+	if (Boss && !Boss->CachedImpactLocation.IsZero())
 	{
-		BaseXY = Boss->WarningDecal->GetComponentLocation();
+		ImpactLocation = Boss->CachedImpactLocation;
 	}
-
-	// 라인트레이스로 데칼 위치 아래의 정확한 지면 Z를 탐지합니다.
-	FVector TraceStart = FVector(BaseXY.X, BaseXY.Y, ActorLocation.Z + 100.f);
-	FVector TraceEnd   = FVector(BaseXY.X, BaseXY.Y, ActorLocation.Z - 500.f);
-
-	FHitResult GroundHit;
-	FCollisionQueryParams QueryParams;
-	QueryParams.AddIgnoredActor(OwnerActor);
-
-	bool bHitGround = MeshComp->GetWorld()->LineTraceSingleByChannel(
-		GroundHit, TraceStart, TraceEnd, ECC_Visibility, QueryParams);
-
-	// GetActorLocation().Z는 캡슐 중심이므로 HalfHeight를 빼면 실제 발 높이가 됩니다.
-	ACharacter* OwnerChar = Cast<ACharacter>(OwnerActor);
-	float FloorZ = ActorLocation.Z;
-	if (OwnerChar)
+	else
 	{
-		FloorZ = ActorLocation.Z - OwnerChar->GetSimpleCollisionHalfHeight();
+		ACharacter* OwnerChar = Cast<ACharacter>(OwnerActor);
+		if (OwnerChar)
+		{
+			ImpactLocation.Z = ActorLocation.Z - OwnerChar->GetSimpleCollisionHalfHeight();
+		}
 	}
-
-	float ImpactZ = bHitGround ? GroundHit.ImpactPoint.Z + 20.f : FloorZ;
-	ImpactZ = FMath::Max(ImpactZ, FloorZ);
-
-	// 이펙트와 데미지의 XY 기준점은 플레이어가 본 경고 위치(데칼)와 동일하게 유지합니다.
-	FVector ImpactLocation = FVector(BaseXY.X, BaseXY.Y, ImpactZ);
 
 	// 경고 데칼을 제거합니다 (위치를 읽은 뒤 이펙트 생성 직전에 처리).
 	if (Boss && Boss->WarningDecal)
@@ -86,6 +70,9 @@ void UAN_GroundSlam::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceBase*
 			ImpactLocation, OwnerActor->GetActorRotation(), EffectScale);
 	}
 
+	// 구체 트레이스와 데미지 적용은 서버에서만 처리합니다.
+	if (!OwnerActor->HasAuthority()) return;
+
 	// 이미 데미지를 준 경우 구체 트레이스를 생략합니다.
 	if (Enemy == nullptr || Enemy->bHasDamaged) return;
 
@@ -99,8 +86,8 @@ void UAN_GroundSlam::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceBase*
 		ImpactLocation, ImpactLocation, DamageRadius,
 		UEngineTypes::ConvertToTraceType(ECC_GameTraceChannel5),
 		false, ActorsToIgnore,
-		EDrawDebugTrace::None, HitResult, true,
-		FLinearColor::Red, FLinearColor::Green, 1.0f);
+		EDrawDebugTrace::ForDuration, HitResult, true,
+		FLinearColor::Red, FLinearColor::Green, 3.0f);
 
 	// 회피 불가 데미지를 적용합니다.
 	if (bHit)
@@ -108,7 +95,10 @@ void UAN_GroundSlam::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceBase*
 		APawn* HitPawn = Cast<APawn>(HitResult.GetActor());
 		if (HitPawn && HitPawn->IsPlayerControlled())
 		{
+			// 히트 리액션 타입을 설정하고 데미지를 적용합니다.
+			Enemy->CurrentHitType = HitType;
 			UGameplayStatics::ApplyDamage(HitPawn, SlamDamage, Enemy->GetController(), Enemy, UUndodgeableDamageType::StaticClass());
+			Enemy->CurrentHitType = FGameplayTag::EmptyTag;
 			Enemy->bHasDamaged = true;
 		}
 	}

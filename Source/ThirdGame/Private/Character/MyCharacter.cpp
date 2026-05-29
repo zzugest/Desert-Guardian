@@ -63,7 +63,16 @@
 #include "Blueprint/UserWidget.h"
 #include "Net/UnrealNetwork.h"
 #include "AutoMoveComponent.h"
+#include "Character/CursorOptionComponent.h"
 #include "NavigationInvokerComponent.h"
+#include "Character/RespawnData.h"
+#include "Enemy/Enemy.h"
+#include "GameplayTagContainer.h"
+#include "AIController.h"
+#include "BehaviorTree/BlackboardComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "Perception/AIPerceptionComponent.h"
+#include "Components/PostProcessComponent.h"
 
 // 복제할 변수를 등록합니다.
 void AMyCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -118,7 +127,16 @@ AMyCharacter::AMyCharacter()
     TargetingComp = CreateDefaultSubobject<UTargetingComponent>(TEXT("TargetingComponent"));
     MinimapComp   = CreateDefaultSubobject<UMinimapComponent>(TEXT("MinimapComp"));
     InventoryComp = CreateDefaultSubobject<UInventoryComponent>(TEXT("InventoryComp"));
-    AutoMoveComp  = CreateDefaultSubobject<UAutoMoveComponent>(TEXT("AutoMoveComp"));
+    AutoMoveComp      = CreateDefaultSubobject<UAutoMoveComponent>(TEXT("AutoMoveComp"));
+    CursorOptionComp  = CreateDefaultSubobject<UCursorOptionComponent>(TEXT("CursorOptionComp"));
+
+    // 사망 시 화면 흑백 처리용 포스트 프로세스 컴포넌트입니다. 기본적으로 비활성(Weight=0)입니다.
+    DeathPostProcess = CreateDefaultSubobject<UPostProcessComponent>(TEXT("DeathPostProcess"));
+    DeathPostProcess->SetupAttachment(RootComponent);
+    DeathPostProcess->bEnabled = true;
+    DeathPostProcess->BlendWeight = 0.f;
+    DeathPostProcess->Settings.bOverride_ColorSaturation = true;
+    DeathPostProcess->Settings.ColorSaturation = FVector4(0.f, 0.f, 0.f, 0.f);
 
     UNavigationInvokerComponent* NavInvoker = CreateDefaultSubobject<UNavigationInvokerComponent>(TEXT("NavInvoker"));
     NavInvoker->SetGenerationRadii(5000.0f, 6000.0f);
@@ -313,18 +331,19 @@ void AMyCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
         EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Completed, this, &AMyCharacter::StopSprint);
     }
 
-    if (ShowCursorAction)
+    if (CursorOptionComp)
     {
-        EnhancedInputComponent->BindAction(ShowCursorAction, ETriggerEvent::Started,   this, &AMyCharacter::OnShowCursorPressed);
-        EnhancedInputComponent->BindAction(ShowCursorAction, ETriggerEvent::Completed, this, &AMyCharacter::OnShowCursorReleased);
+        CursorOptionComp->BindInputActions(EnhancedInputComponent);
     }
 }
 
 // 좌클릭 공격 입력 시 타겟 방향을 계산해 서버에 공격을 요청합니다.
 void AMyCharacter::Attack(const FInputActionValue& Value)
 {
+    if (HasStateTag("State.Dead")) return;
+    if (HasStateTag("State.Action.HitReaction") || HasStateTag("State.Action.HitReaction.Air") || HasStateTag("State.Action.HitReaction.AirLaunch")) return;
     if (!CombatComp) return;
-    if (AutoMoveComp) AutoMoveComp->StopAutoMove();
+    if (AutoMoveComp) AutoMoveComp->CancelAutoMove();
 
     // 타겟이 있으면 그 방향, 없으면 현재 방향 그대로 전달합니다.
     FRotator SnapRotation = GetActorRotation();
@@ -375,6 +394,8 @@ void AMyCharacter::Server_RequestPortalTravel_Implementation(FName TargetSubLeve
 // 목적지 서브레벨 로드 완료 콜백: 현재 존을 업데이트하고 텔레포트 후 이전 서브레벨을 언로드합니다.
 void AMyCharacter::OnPortalLevelLoaded()
 {
+    UE_LOG(LogTemp, Warning, TEXT("[Portal] OnPortalLevelLoaded 호출됨. CurrentZoneName 설정: [%s]"), *PendingTargetSubLevelName.ToString());
+
     // 현재 존 업데이트: 다른 플레이어의 레퍼런스 카운팅에 사용됩니다.
     CurrentZoneName = PendingTargetSubLevelName;
 
@@ -518,6 +539,8 @@ void AMyCharacter::OnGroupPortalLevelLoaded()
 // 다른 클라이언트에는 호출되지 않아 각자의 화면에 자신의 존만 렌더링됩니다.
 void AMyCharacter::Client_UpdateZoneStreaming_Implementation(FName ToLoad, FName ToUnload)
 {
+    CurrentZoneName = ToLoad;
+
     // 새 존 지오메트리를 이 클라이언트 로컬에서만 로드합니다.
     if (!ToLoad.IsNone())
     {
@@ -719,12 +742,16 @@ void AMyCharacter::NotifyActorEndOverlap(AActor* OtherActor)
 // 스턴·지상 공격 중·착지 모션 중에는 이동이 차단됩니다.
 void AMyCharacter::Move(const FInputActionValue& Value)
 {
+    if (HasStateTag("State.Dead")) return;
+    if (HasStateTag("State.Action.HitReaction") || HasStateTag("State.Action.HitReaction.AirLaunch")) return;
     if (HasStateTag("State.CC.Stun")) return;
 
     bool bIsGroundAttacking = HasStateTag("State.Action.Attacking") && !HasStateTag("State.Movement.InAir");
     bool bIsJumpLanding     = HasStateTag("State.Action.JumpLanding");
 
     if (bIsGroundAttacking || bIsJumpLanding) return;
+
+    if (AutoMoveComp) AutoMoveComp->CancelAutoMove();
 
     FVector2D MovementVector = Value.Get<FVector2D>();
 
@@ -755,6 +782,8 @@ void AMyCharacter::Look(const FInputActionValue& Value)
 // F 키 입력 시 우선순위에 따라 아이템 줍기 → NPC 대화 → 맵 포탈 순서로 상호작용을 시도합니다.
 void AMyCharacter::Interact(const FInputActionValue& Value)
 {
+    if (HasStateTag("State.Dead")) return;
+
     // 1순위: 겹쳐 있는 아이템 줍기
     if (OverlappingItem)
     {
@@ -859,9 +888,9 @@ void AMyCharacter::ProcessQuickSlot(int32 SlotIndex)
 }
 
 // Q / E / R 키 입력을 받아 SkillComponent의 해당 슬롯 스킬 시전을 시도합니다.
-void AMyCharacter::UseSkillQ(const FInputActionValue& Value) { if (AutoMoveComp) AutoMoveComp->StopAutoMove(); if (SkillComp) SkillComp->TryCastSkill(0); }
-void AMyCharacter::UseSkillE(const FInputActionValue& Value) { if (AutoMoveComp) AutoMoveComp->StopAutoMove(); if (SkillComp) SkillComp->TryCastSkill(1); }
-void AMyCharacter::UseSkillR(const FInputActionValue& Value) { if (AutoMoveComp) AutoMoveComp->StopAutoMove(); if (SkillComp) SkillComp->TryCastSkill(2); }
+void AMyCharacter::UseSkillQ(const FInputActionValue& Value) { if (AutoMoveComp) AutoMoveComp->CancelAutoMove(); if (SkillComp) SkillComp->TryCastSkill(0); }
+void AMyCharacter::UseSkillE(const FInputActionValue& Value) { if (AutoMoveComp) AutoMoveComp->CancelAutoMove(); if (SkillComp) SkillComp->TryCastSkill(1); }
+void AMyCharacter::UseSkillR(const FInputActionValue& Value) { if (AutoMoveComp) AutoMoveComp->CancelAutoMove(); if (SkillComp) SkillComp->TryCastSkill(2); }
 
 // GameplayTag 컨테이너에 상태 태그를 추가 / 제거 / 확인합니다.
 void AMyCharacter::AddStateTag(FName TagName)  { ActionTags.AddTag(FGameplayTag::RequestGameplayTag(TagName)); }
@@ -871,10 +900,14 @@ bool AMyCharacter::HasStateTag(FName TagName)  { return ActionTags.HasTag(FGamep
 // 공격·스턴·구르기 중에는 점프를 차단하고, 그 외에는 기본 점프를 실행합니다.
 void AMyCharacter::Jump()
 {
+    if (HasStateTag("State.Dead")) return;
+    if (HasStateTag("State.Action.HitReaction") || HasStateTag("State.Action.HitReaction.Air") || HasStateTag("State.Action.HitReaction.AirLaunch")) return;
     if (HasStateTag("State.Action.Attacking") || HasStateTag("State.CC.Stun") || HasStateTag("State.Action.Rolling"))
     {
         return;
     }
+
+    if (AutoMoveComp) AutoMoveComp->CancelAutoMove();
 
     Super::Jump();
 }
@@ -957,6 +990,17 @@ void AMyCharacter::Landed(const FHitResult& Hit)
 
     RemoveStateTag(FName("State.Movement.InAir"));
 
+    // 공중 Launch 피격 중 착지하면 일반 착지 애니메이션 대신 End 섹션으로 전환합니다.
+    if (HasStateTag("State.Action.HitReaction.AirLaunch"))
+    {
+        UAnimInstance* AnimInst = GetMesh()->GetAnimInstance();
+        if (AnimInst && AirLaunchMontage)
+        {
+            AnimInst->Montage_JumpToSection(FName("End"), AirLaunchMontage);
+        }
+        return;
+    }
+
     if (CombatComp)
     {
         CombatComp->PlayJumpLandingAnim();
@@ -993,14 +1037,153 @@ float AMyCharacter::TakeDamage(float DamageAmount, struct FDamageEvent const& Da
     {
         EnterCombatStance();
         CombatComp->ReceiveDamage(ActualDamage);
+
+        // DamageCauser(적)의 HitType 태그를 읽어 히트 리액션 몽타주를 결정합니다.
+        AEnemy* AttackingEnemy = Cast<AEnemy>(DamageCauser);
+        if (AttackingEnemy && AttackingEnemy->CurrentHitType.IsValid())
+        {
+            static const FGameplayTag KnockbackTag = FGameplayTag::RequestGameplayTag("HitType.Knockback");
+            static const FGameplayTag LaunchTag    = FGameplayTag::RequestGameplayTag("HitType.Launch");
+
+            if (AttackingEnemy->CurrentHitType == LaunchTag && !HasStateTag("State.Action.HitReaction.AirLaunch"))
+            {
+                FVector TowardAttacker = (DamageCauser->GetActorLocation() - GetActorLocation()).GetSafeNormal2D();
+                FRotator FaceRotation = FRotator(0.f, TowardAttacker.Rotation().Yaw, 0.f);
+
+                if (HasStateTag("State.Movement.InAir"))
+                {
+                    Multicast_PlayAirLaunchReaction(FaceRotation);
+                }
+                else
+                {
+                    Multicast_PlayLaunchReaction(FaceRotation);
+                }
+            }
+            else if (AttackingEnemy->CurrentHitType == KnockbackTag)
+            {
+                // 공격자 기준이 아닌 내 캐릭터 기준으로 공격자 방향을 판별합니다.
+                FVector ToAttacker = (DamageCauser->GetActorLocation() - GetActorLocation()).GetSafeNormal2D();
+                float ForwardDot = FVector::DotProduct(GetActorForwardVector(), ToAttacker);
+                float RightDot   = FVector::DotProduct(GetActorRightVector(),   ToAttacker);
+
+                const bool bIsAirHit = HasStateTag("State.Movement.InAir");
+
+                UAnimMontage* HitMontage = nullptr;
+                if (FMath::Abs(ForwardDot) >= FMath::Abs(RightDot))
+                {
+                    if (bIsAirHit)
+                        HitMontage = (ForwardDot >= 0.f) ? AirKnockbackFrontMontage : AirKnockbackBackMontage;
+                    else
+                        HitMontage = (ForwardDot >= 0.f) ? KnockbackFrontMontage : KnockbackBackMontage;
+                }
+                else
+                {
+                    if (bIsAirHit)
+                        HitMontage = (RightDot >= 0.f) ? AirKnockbackRightMontage : AirKnockbackLeftMontage;
+                    else
+                        HitMontage = (RightDot >= 0.f) ? KnockbackRightMontage : KnockbackLeftMontage;
+                }
+
+                if (HitMontage)
+                {
+                    Multicast_PlayHitReaction(HitMontage, bIsAirHit);
+                }
+            }
+        }
     }
 
     return ActualDamage;
 }
 
+// 모든 클라이언트에서 히트 리액션 몽타주를 재생합니다.
+// 모든 클라이언트에서 캐릭터를 공격자 반대 방향으로 회전시키고 Launch 몽타주를 재생합니다.
+void AMyCharacter::Multicast_PlayLaunchReaction_Implementation(FRotator FaceRotation)
+{
+    if (!LaunchMontage) return;
+
+    StopAnimMontage();
+
+    // 공격자를 바라보도록 캐릭터를 회전시킵니다.
+    SetActorRotation(FaceRotation);
+
+    AddStateTag("State.Action.HitReaction");
+
+    PlayAnimMontage(LaunchMontage);
+
+    UAnimInstance* AnimInst = GetMesh()->GetAnimInstance();
+    if (AnimInst)
+    {
+        FOnMontageEnded EndDelegate;
+        EndDelegate.BindUObject(this, &AMyCharacter::OnHitReactionMontageEnded);
+        AnimInst->Montage_SetEndDelegate(EndDelegate, LaunchMontage);
+    }
+}
+
+// 공중 Launch: Start 섹션 재생 → Loop 자동 전환 → 착지 시 End로 점프합니다.
+void AMyCharacter::Multicast_PlayAirLaunchReaction_Implementation(FRotator FaceRotation)
+{
+    if (!AirLaunchMontage) return;
+
+    StopAnimMontage();
+    SetActorRotation(FaceRotation);
+
+    AddStateTag("State.Action.HitReaction.AirLaunch");
+
+    PlayAnimMontage(AirLaunchMontage);
+
+    // End 섹션 종료 시 태그를 제거합니다.
+    UAnimInstance* AnimInst = GetMesh()->GetAnimInstance();
+    if (AnimInst)
+    {
+        FOnMontageEnded EndDelegate;
+        EndDelegate.BindUObject(this, &AMyCharacter::OnAirLaunchMontageEnded);
+        AnimInst->Montage_SetEndDelegate(EndDelegate, AirLaunchMontage);
+    }
+}
+
+// 공중 Launch 몽타주(End 섹션)가 끝나면 AirLaunch 태그를 제거합니다.
+void AMyCharacter::OnAirLaunchMontageEnded(UAnimMontage* Montage, bool bInterrupted)
+{
+    RemoveStateTag("State.Action.HitReaction.AirLaunch");
+}
+
+void AMyCharacter::Multicast_PlayHitReaction_Implementation(UAnimMontage* Montage, bool bIsAirHit)
+{
+    if (!Montage) return;
+
+    // 현재 재생 중인 몽타주(공격 등)를 즉시 중단하고 히트 리액션을 우선합니다.
+    StopAnimMontage();
+
+    // 공중 피격은 이동을 허용하기 위해 별도 태그를 사용합니다.
+    if (bIsAirHit)
+        AddStateTag("State.Action.HitReaction.Air");
+    else
+        AddStateTag("State.Action.HitReaction");
+
+    PlayAnimMontage(Montage);
+
+    // 몽타주 종료 시 태그를 제거합니다.
+    UAnimInstance* AnimInst = GetMesh()->GetAnimInstance();
+    if (AnimInst)
+    {
+        FOnMontageEnded EndDelegate;
+        EndDelegate.BindUObject(this, &AMyCharacter::OnHitReactionMontageEnded);
+        AnimInst->Montage_SetEndDelegate(EndDelegate, Montage);
+    }
+}
+
+// 히트 리액션 몽타주 종료 시 두 히트 태그를 모두 제거합니다.
+void AMyCharacter::OnHitReactionMontageEnded(UAnimMontage* Montage, bool bInterrupted)
+{
+    RemoveStateTag("State.Action.HitReaction");
+    RemoveStateTag("State.Action.HitReaction.Air");
+}
+
 // Shift 키를 누르면 전투 자세면 구르기(8방향)를, 일반 상태면 달리기를 시작합니다.
 void AMyCharacter::StartSprint()
 {
+    if (HasStateTag("State.Dead")) return;
+    if (HasStateTag("State.Action.HitReaction") || HasStateTag("State.Action.HitReaction.Air") || HasStateTag("State.Action.HitReaction.AirLaunch")) return;
     if (HasStateTag("State.Movement.InAir") || HasStateTag("State.Action.Attacking") || HasStateTag("State.Action.Rolling") || HasStateTag("State.Action.MagicCasting")) return;
 
     if (HasStateTag("State.Stance.Combat"))
@@ -1094,6 +1277,8 @@ void AMyCharacter::ServerStopSprint_Implementation()
 void AMyCharacter::EnterCombatStance()
 {
     AddStateTag("State.Stance.Combat");
+    AddStateTag("Block.AutoMove.Combat");
+    if (AutoMoveComp) AutoMoveComp->StopAutoMove();
 
     // 공격·피격이 없으면 CombatTimeout 후 자동으로 전투 자세 해제
     GetWorldTimerManager().SetTimer(CombatTimerHandle, this, &AMyCharacter::ExitCombatStance, CombatTimeout, false);
@@ -1115,6 +1300,7 @@ void AMyCharacter::EnterCombatStance()
 void AMyCharacter::ExitCombatStance()
 {
     RemoveStateTag("State.Stance.Combat");
+    RemoveStateTag("Block.AutoMove.Combat");
 
     if (GetCharacterMovement())
     {
@@ -1220,29 +1406,12 @@ void AMyCharacter::Server_ReportMagicHit_Implementation(const TArray<AActor*>& H
     CombatComp->ServerApplyMagicDamage(HitEnemies, MagicAttackID);
 }
 
-// Ctrl 키를 누르는 동안 마우스 커서를 보여주고 게임+UI 복합 입력 모드로 전환합니다.
-void AMyCharacter::OnShowCursorPressed(const FInputActionValue& Value)
-{
-    APlayerController* PC = Cast<APlayerController>(GetController());
-    if (!PC) return;
-
-    PC->bShowMouseCursor = true;
-    PC->SetInputMode(FInputModeUIOnly());
-}
-
-// Ctrl 키를 떼면 마우스 커서를 숨기고 게임 전용 입력 모드로 복원합니다.
-void AMyCharacter::OnShowCursorReleased(const FInputActionValue& Value)
-{
-    APlayerController* PC = Cast<APlayerController>(GetController());
-    if (!PC) return;
-
-    PC->bShowMouseCursor = false;
-    PC->SetInputMode(FInputModeGameOnly());
-}
 
 // 우클릭 마법 공격 입력 시 로컬 타겟을 파라미터로 담아 서버에 마법 공격을 요청합니다.
 void AMyCharacter::MagicAttack()
 {
+    if (HasStateTag("State.Dead")) return;
+    if (HasStateTag("State.Action.HitReaction") || HasStateTag("State.Action.HitReaction.Air") || HasStateTag("State.Action.HitReaction.AirLaunch")) return;
     if (AutoMoveComp) AutoMoveComp->StopAutoMove();
     if (CombatComp)
     {
@@ -1389,5 +1558,116 @@ void AMyCharacter::MulticastPlaySkillMontage_Implementation(UAnimMontage* Montag
     if (Montage)
     {
         PlayAnimMontage(Montage);
+    }
+}
+
+// 캐릭터 사망 처리: State.Dead 태그 부여, 충돌 해제, 적 타겟 해제, 사망 몽타주 재생을 순서대로 실행합니다.
+void AMyCharacter::Die()
+{
+    if (!HasAuthority()) return;
+    if (HasStateTag("State.Dead")) return;
+
+    // 적 및 다른 플레이어와의 충돌을 비활성화합니다.
+    GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+
+    // 모든 적의 블랙보드에서 이 캐릭터를 타겟에서 즉시 해제합니다.
+    TArray<AActor*> AllEnemies;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AEnemy::StaticClass(), AllEnemies);
+    for (AActor* Actor : AllEnemies)
+    {
+        AEnemy* Enemy = Cast<AEnemy>(Actor);
+        if (!Enemy) continue;
+
+        AAIController* AIC = Cast<AAIController>(Enemy->GetController());
+        if (!AIC) continue;
+
+        UBlackboardComponent* BB = AIC->GetBlackboardComponent();
+        if (!BB) continue;
+
+        if (BB->GetValueAsObject(TEXT("TargetPlayer")) == this)
+        {
+            BB->ClearValue(TEXT("TargetPlayer"));
+            if (Enemy->AIPerceptionComp)
+            {
+                Enemy->AIPerceptionComp->ForgetActor(this);
+            }
+        }
+    }
+
+    Multicast_PlayDeathMontage();
+}
+
+// 모든 클라이언트에 사망 몽타주를 재생하고 서버에서 종료 콜백을 등록합니다.
+void AMyCharacter::Multicast_PlayDeathMontage_Implementation()
+{
+    if (!DeathMontage) return;
+
+    UAnimInstance* AnimInst = GetMesh()->GetAnimInstance();
+    if (!AnimInst) return;
+
+    AnimInst->Montage_Play(DeathMontage);
+
+    // 몽타주 종료 후 Respawn 호출은 서버에서만 처리합니다.
+    if (HasAuthority())
+    {
+        FOnMontageEnded EndDelegate;
+        EndDelegate.BindUObject(this, &AMyCharacter::OnDeathMontageEnded);
+        AnimInst->Montage_SetEndDelegate(EndDelegate, DeathMontage);
+    }
+}
+
+// 사망 몽타주 종료 콜백: 서버에서만 Respawn()을 호출합니다.
+void AMyCharacter::OnDeathMontageEnded(UAnimMontage* Montage, bool bInterrupted)
+{
+    if (!HasAuthority()) return;
+    Respawn();
+}
+
+// 부활 처리: HP 30 복구, 태그 제거, 충돌 복구, DataTable 기반 위치로 이동합니다.
+void AMyCharacter::Respawn()
+{
+    if (!HasAuthority()) return;
+
+    if (CombatComp)
+    {
+        CombatComp->CurrentHP = 30.f;
+    }
+
+    // 충돌을 복구합니다.
+    GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+
+    // DataTable에서 현재 레벨에 해당하는 부활 위치를 조회합니다.
+    FVector SpawnLocation = GetActorLocation();
+    FRotator SpawnRotation = GetActorRotation();
+
+    if (RespawnDataTable)
+    {
+        TArray<FRespawnData*> AllRows;
+        RespawnDataTable->GetAllRows<FRespawnData>(TEXT("Respawn"), AllRows);
+        for (FRespawnData* Row : AllRows)
+        {
+            if (Row && Row->LevelName == CurrentZoneName)
+            {
+                SpawnLocation = Row->RespawnLocation;
+                SpawnRotation = Row->RespawnRotation;
+                break;
+            }
+        }
+    }
+
+    Multicast_Respawn(SpawnLocation, SpawnRotation);
+}
+
+// 모든 클라이언트에서 지정 위치로 이동하고 HUD를 갱신합니다.
+void AMyCharacter::Multicast_Respawn_Implementation(FVector Location, FRotator Rotation)
+{
+    SetActorLocationAndRotation(Location, Rotation, false, nullptr, ETeleportType::TeleportPhysics);
+
+    if (CombatComp && PlayerHUD)
+    {
+        PlayerHUD->UpdateState(
+            CombatComp->CurrentHP, CombatComp->MaxHP,
+            CombatComp->CurrentMP, CombatComp->MaxMP,
+            CombatComp->CurrentSP, CombatComp->MaxSP);
     }
 }

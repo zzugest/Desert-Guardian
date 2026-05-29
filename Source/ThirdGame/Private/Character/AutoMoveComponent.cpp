@@ -16,8 +16,15 @@
 #include "NavigationSystem.h"
 #include "NavigationPath.h"
 #include "Components/DecalComponent.h"
+#include "Components/CapsuleComponent.h"
 #include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetSystemLibrary.h"
 #include "TimerManager.h"
+#include "GlobalUI/WarningSubsystem.h"
+#include "MyCharacter.h"
+#include "CombatComponent.h"
+#include "Enemy.h"
+#include "DrawDebugHelpers.h"
 
 UAutoMoveComponent::UAutoMoveComponent()
 {
@@ -42,6 +49,25 @@ void UAutoMoveComponent::StartAutoMove(FVector TargetLocation)
 {
 	ACharacter* OwnerChar = Cast<ACharacter>(GetOwner());
 	if (!OwnerChar || !OwnerChar->IsLocallyControlled()) return;
+
+	// Block.AutoMove 태그가 있으면 자동이동을 시작하지 않습니다.
+	AMyCharacter* MyChar = Cast<AMyCharacter>(OwnerChar);
+	if (MyChar && MyChar->HasStateTag("Block.AutoMove"))
+	{
+		UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+		if (GI)
+		{
+			UWarningSubsystem* WarnSys = GI->GetSubsystem<UWarningSubsystem>();
+			if (WarnSys)
+			{
+				FText WarningText = FText::FromStringTable(
+					TEXT("/Game/character/ST_WarningMessages.ST_WarningMessages"),
+					TEXT("AutoMove_BlockedByCombat"));
+				WarnSys->ShowWarning(WarningText);
+			}
+		}
+		return;
+	}
 
 	Destination        = TargetLocation;
 	UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 원본 목적지: %s"), *Destination.ToString());
@@ -73,10 +99,24 @@ void UAutoMoveComponent::StartAutoMove(FVector TargetLocation)
 			bStartOk ? TEXT("O") : TEXT("X"), bEndOk ? TEXT("O") : TEXT("X"));
 	}
 
-	CurrentPathIndex   = 0;
-	StuckTimer         = 0.0f;
+	CurrentPathIndex      = 0;
+	StuckTimer            = 0.0f;
 	StuckCheckAccumulator = 0.0f;
-	LastStuckCheckPos  = OwnerChar->GetActorLocation();
+	LastStuckCheckPos     = OwnerChar->GetActorLocation();
+	bIsDetouring          = false;
+	DetourWaypoint        = FVector::ZeroVector;
+	AvoidanceScanAccumulator = 0.0f;
+
+	// 시작 시 이미 겹치는 적은 무시 목록에 등록해 즉시 우회 발동을 방지합니다.
+	IgnoredEnemies.Empty();
+	TArray<AActor*> NearbyActors;
+	TArray<TEnumAsByte<EObjectTypeQuery>> ObjTypes;
+	ObjTypes.Add(UEngineTypes::ConvertToObjectType(ECC_Pawn));
+	UKismetSystemLibrary::SphereOverlapActors(
+		GetWorld(), OwnerChar->GetActorLocation(), 300.f,
+		ObjTypes, AEnemy::StaticClass(),
+		TArray<AActor*>{ OwnerChar }, NearbyActors);
+	IgnoredEnemies = NearbyActors;
 
 	// 초기 경로 계산. 경로를 찾지 못하면 시작하지 않습니다.
 	RecalcPath();
@@ -88,11 +128,38 @@ void UAutoMoveComponent::StartAutoMove(FVector TargetLocation)
 
 	bIsAutoMoving = true;
 	SetComponentTickEnabled(true);
+	UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 자동이동 시작 → 목적지: %s"), *Destination.ToString());
+
+	UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+	if (GI)
+	{
+		UWarningSubsystem* WarnSys = GI->GetSubsystem<UWarningSubsystem>();
+		if (WarnSys)
+		{
+			FText WarningText = FText::FromStringTable(
+				TEXT("/Game/character/ST_WarningMessages.ST_WarningMessages"),
+				TEXT("AutoMove_Started"));
+			WarnSys->ShowWarning(WarningText);
+		}
+	}
 
 	// 몬스터를 NavMesh Obstacle로 피하기 위해 RVO Avoidance를 활성화합니다.
 	if (UCharacterMovementComponent* MovComp = OwnerChar->GetCharacterMovement())
 	{
 		MovComp->bUseRVOAvoidance = true;
+	}
+
+	// SP가 0보다 크면 Sprint로 시작합니다.
+	AMyCharacter* MyCharForSprint = Cast<AMyCharacter>(OwnerChar);
+	if (MyCharForSprint && MyCharForSprint->CombatComp && MyCharForSprint->CombatComp->CurrentSP > 0.f)
+	{
+		MyCharForSprint->StartSprint();
+		bAutoMoveSprinting = true;
+		UE_LOG(LogTemp, Warning, TEXT("[AutoMove] Sprint 시작"));
+	}
+	else
+	{
+		bAutoMoveSprinting = false;
 	}
 
 	// 1초마다 경로를 재계산해 장애물 변화를 반영합니다.
@@ -120,9 +187,13 @@ void UAutoMoveComponent::StopAutoMove()
 
 	ClearPathDecals();
 	PathPoints.Empty();
-	CurrentPathIndex      = 0;
-	StuckTimer            = 0.0f;
-	StuckCheckAccumulator = 0.0f;
+	CurrentPathIndex         = 0;
+	StuckTimer               = 0.0f;
+	StuckCheckAccumulator    = 0.0f;
+	bIsDetouring             = false;
+	DetourWaypoint           = FVector::ZeroVector;
+	AvoidanceScanAccumulator = 0.0f;
+	IgnoredEnemies.Empty();
 
 	// RVO Avoidance를 원래 상태로 되돌립니다.
 	ACharacter* OwnerChar = Cast<ACharacter>(GetOwner());
@@ -131,6 +202,36 @@ void UAutoMoveComponent::StopAutoMove()
 		if (UCharacterMovementComponent* MovComp = OwnerChar->GetCharacterMovement())
 		{
 			MovComp->bUseRVOAvoidance = false;
+		}
+
+		// 자동이동 중 Sprint 중이었다면 해제합니다.
+		if (bAutoMoveSprinting)
+		{
+			AMyCharacter* MyChar = Cast<AMyCharacter>(OwnerChar);
+			if (MyChar) MyChar->StopSprint();
+			bAutoMoveSprinting = false;
+		}
+	}
+}
+
+// 플레이어 입력으로 자동이동을 취소하고 취소 경고 메시지를 화면에 표시합니다.
+void UAutoMoveComponent::CancelAutoMove()
+{
+	if (!bIsAutoMoving) return;
+
+	UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 플레이어 입력으로 취소"));
+	StopAutoMove();
+
+	UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+	if (GI)
+	{
+		UWarningSubsystem* WarnSys = GI->GetSubsystem<UWarningSubsystem>();
+		if (WarnSys)
+		{
+			FText WarningText = FText::FromStringTable(
+				TEXT("/Game/character/ST_WarningMessages.ST_WarningMessages"),
+				TEXT("AutoMove_Cancelled"));
+			WarnSys->ShowWarning(WarningText);
 		}
 	}
 }
@@ -158,8 +259,10 @@ void UAutoMoveComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		if (Moved < StuckDistanceThreshold)
 		{
 			StuckTimer += 1.0f;
+			UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 제자리 감지 (StuckTimer: %.0f / %.0f초)"), StuckTimer, StuckMaxTime);
 			if (StuckTimer >= StuckMaxTime)
 			{
+				UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 제자리 한계 → 자동이동 중단"));
 				StopAutoMove();
 				return;
 			}
@@ -171,29 +274,208 @@ void UAutoMoveComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		}
 	}
 
-	// ── 웨이포인트 통과 판정 ─────────────────────────────────────────
-	while (CurrentPathIndex < PathPoints.Num())
+	// ── 전방 적 탐지 스캔 (목적지 근처에서는 비활성화) ──────────────
+	if (FVector::Dist2D(CurrentPos, Destination) > ArrivalAvoidanceDisableRadius)
 	{
-		if (FVector::Dist2D(CurrentPos, PathPoints[CurrentPathIndex]) <= WaypointAcceptanceRadius)
+		AvoidanceScanAccumulator += DeltaTime;
+		if (AvoidanceScanAccumulator >= AvoidanceScanInterval)
 		{
-			CurrentPathIndex++;
-		}
-		else
-		{
-			break;
+			AvoidanceScanAccumulator = 0.0f;
+			CheckAndDetour();
 		}
 	}
 
-	// 모든 웨이포인트를 통과하면 목적지에 도착한 것으로 간주합니다.
-	if (CurrentPathIndex >= PathPoints.Num())
+	// ── 우회 경유지 도달 체크 ─────────────────────────────────────────
+	if (bIsDetouring && FVector::Dist2D(CurrentPos, DetourWaypoint) <= WaypointAcceptanceRadius)
 	{
-		StopAutoMove();
+		bIsDetouring = false;
+		UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 우회 완료 → 경로 재탐색"));
+		RecalcPath();
 		return;
 	}
 
+	// ── 다음 목표 결정 (우회 중이면 경유지, 아니면 일반 웨이포인트) ──
+	FVector NextTarget;
+	if (bIsDetouring)
+	{
+		NextTarget = DetourWaypoint;
+	}
+	else
+	{
+		// 웨이포인트 통과 판정
+		while (CurrentPathIndex < PathPoints.Num())
+		{
+			if (FVector::Dist2D(CurrentPos, PathPoints[CurrentPathIndex]) <= WaypointAcceptanceRadius)
+				CurrentPathIndex++;
+			else
+				break;
+		}
+
+		if (CurrentPathIndex >= PathPoints.Num())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 목적지 도착 → 자동이동 완료"));
+
+			UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+			if (GI)
+			{
+				UWarningSubsystem* WarnSys = GI->GetSubsystem<UWarningSubsystem>();
+				if (WarnSys)
+				{
+					FText WarningText = FText::FromStringTable(
+						TEXT("/Game/character/ST_WarningMessages.ST_WarningMessages"),
+						TEXT("AutoMove_Arrived"));
+					WarnSys->ShowWarning(WarningText);
+				}
+			}
+
+			StopAutoMove();
+			return;
+		}
+
+		NextTarget = PathPoints[CurrentPathIndex];
+	}
+
+	// ── SP 기반 Sprint 제어 ──────────────────────────────────────────
+	AMyCharacter* MyChar = Cast<AMyCharacter>(OwnerChar);
+	if (MyChar && MyChar->CombatComp)
+	{
+		const float CurrentSP = MyChar->CombatComp->CurrentSP;
+		const float MaxSP     = MyChar->CombatComp->MaxSP;
+
+		if (bAutoMoveSprinting && CurrentSP <= 0.f)
+		{
+			// SP 소진 → Sprint 중단
+			MyChar->StopSprint();
+			bAutoMoveSprinting = false;
+			UE_LOG(LogTemp, Warning, TEXT("[AutoMove] SP 소진 → Sprint 중단"));
+		}
+		else if (!bAutoMoveSprinting && CurrentSP >= MaxSP)
+		{
+			// SP 완전 회복 → Sprint 재개
+			MyChar->StartSprint();
+			bAutoMoveSprinting = true;
+			UE_LOG(LogTemp, Warning, TEXT("[AutoMove] SP 회복 → Sprint 재개"));
+		}
+	}
+
 	// ── 이동 입력 ────────────────────────────────────────────────────
-	FVector Dir = (PathPoints[CurrentPathIndex] - CurrentPos).GetSafeNormal2D();
+	FVector Dir = (NextTarget - CurrentPos).GetSafeNormal2D();
 	OwnerChar->AddMovementInput(Dir, 1.0f);
+
+}
+
+// 전방 적을 탐지해 경로가 막혀있으면 우회 경유지를 설정합니다.
+void UAutoMoveComponent::CheckAndDetour()
+{
+	ACharacter* OwnerChar = Cast<ACharacter>(GetOwner());
+	if (!OwnerChar || !bIsAutoMoving) return;
+
+	FVector CurrentPos = OwnerChar->GetActorLocation();
+
+	// 현재 향하고 있는 목표 방향 계산
+	FVector CurrentTarget = bIsDetouring ? DetourWaypoint
+		: (CurrentPathIndex < PathPoints.Num() ? PathPoints[CurrentPathIndex] : Destination);
+
+	FVector MoveDir = (CurrentTarget - CurrentPos).GetSafeNormal2D();
+	if (MoveDir.IsNearlyZero()) return;
+
+	// 전방 DetourScanRange 범위 내 AEnemy 탐색
+	TArray<AActor*> OverlapActors;
+	TArray<TEnumAsByte<EObjectTypeQuery>> ObjTypes;
+	ObjTypes.Add(UEngineTypes::ConvertToObjectType(ECC_Pawn));
+	UKismetSystemLibrary::SphereOverlapActors(
+		GetWorld(), CurrentPos, DetourScanRange,
+		ObjTypes, AEnemy::StaticClass(),
+		TArray<AActor*>{ OwnerChar }, OverlapActors);
+
+	int32 FrontEnemyCount = 0;
+
+	for (AActor* Actor : OverlapActors)
+	{
+		AEnemy* Enemy = Cast<AEnemy>(Actor);
+		if (!Enemy) continue;
+		if (IgnoredEnemies.Contains(Enemy)) continue;
+
+		// 이동 방향 앞쪽에 있는 적만 처리합니다 (dot > 0.3).
+		FVector ToEnemy = (Enemy->GetActorLocation() - CurrentPos).GetSafeNormal2D();
+		if (FVector::DotProduct(MoveDir, ToEnemy) < 0.3f) continue;
+
+		FrontEnemyCount++;
+		float AvoidRadius = Enemy->GetCapsuleComponent()->GetScaledCapsuleRadius() * EnemyAvoidanceMultiplier;
+
+		// 전방 적 회피 구체를 초록색으로 표시합니다 (0.4초 지속).
+		DrawDebugSphere(GetWorld(), Enemy->GetActorLocation(), AvoidRadius, 16, FColor::Green, false, 0.4f);
+
+		// 현재 경로(현재위치~목표)와 적 사이의 최소 거리가 회피 반경 이내인지 확인합니다.
+		FVector ClosestPt = FMath::ClosestPointOnSegment(Enemy->GetActorLocation(), CurrentPos, CurrentTarget);
+		float DistToPath  = FVector::Dist2D(ClosestPt, Enemy->GetActorLocation());
+
+		if (DistToPath < AvoidRadius)
+		{
+			// 경로를 막는 적을 빨간색으로 표시합니다.
+			DrawDebugSphere(GetWorld(), Enemy->GetActorLocation(), AvoidRadius, 16, FColor::Red, false, 0.4f);
+
+			FVector OutPoint;
+			if (ComputeDetourPoint(Enemy->GetActorLocation(), AvoidRadius, OutPoint))
+			{
+				DetourWaypoint = OutPoint;
+				bIsDetouring   = true;
+				UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 적 감지 → 우회 경유지: %s"), *OutPoint.ToString());
+				return; // 가장 가까운 적 하나만 처리하고 다음 스캔에서 체이닝합니다.
+			}
+		}
+	}
+
+	if (FrontEnemyCount > 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 전방 적 %d마리 탐지 (경로 교차 없음)"), FrontEnemyCount);
+	}
+}
+
+// 적 위치를 기준으로 좌/우 경유지를 계산하고 NavMesh에 투영합니다.
+bool UAutoMoveComponent::ComputeDetourPoint(FVector EnemyPos, float AvoidRadius, FVector& OutPoint)
+{
+	ACharacter* OwnerChar = Cast<ACharacter>(GetOwner());
+	if (!OwnerChar) return false;
+
+	FVector CurrentPos = OwnerChar->GetActorLocation();
+	FVector MoveDir    = (Destination - CurrentPos).GetSafeNormal2D();
+	if (MoveDir.IsNearlyZero()) return false;
+
+	const float Buffer = 100.f;
+	FVector PerpLeft   = FVector(-MoveDir.Y,  MoveDir.X, 0.f);
+	FVector PerpRight  = FVector( MoveDir.Y, -MoveDir.X, 0.f);
+
+	// 적 위치 기준으로 좌/우 후보 경유지를 구합니다 (Z는 플레이어 높이 사용).
+	FVector LeftPoint  = FVector(EnemyPos.X, EnemyPos.Y, CurrentPos.Z) + PerpLeft  * (AvoidRadius + Buffer);
+	FVector RightPoint = FVector(EnemyPos.X, EnemyPos.Y, CurrentPos.Z) + PerpRight * (AvoidRadius + Buffer);
+
+	UNavigationSystemV1* NavSys = UNavigationSystemV1::GetCurrent(GetWorld());
+	if (!NavSys) return false;
+
+	FNavLocation NavLeft, NavRight;
+	bool bLeftOk  = NavSys->ProjectPointToNavigation(LeftPoint,  NavLeft,  FVector(150.f, 150.f, 300.f));
+	bool bRightOk = NavSys->ProjectPointToNavigation(RightPoint, NavRight, FVector(150.f, 150.f, 300.f));
+
+	if (!bLeftOk && !bRightOk)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 우회 경로 없음 (좌/우 모두 NavMesh 투영 실패)"));
+		return false;
+	}
+
+	if (bLeftOk && bRightOk)
+	{
+		// Destination까지 거리가 짧은 쪽을 선택합니다.
+		float DistLeft  = FVector::Dist2D(NavLeft.Location,  Destination);
+		float DistRight = FVector::Dist2D(NavRight.Location, Destination);
+		OutPoint = (DistLeft < DistRight) ? NavLeft.Location : NavRight.Location;
+	}
+	else
+	{
+		OutPoint = bLeftOk ? NavLeft.Location : NavRight.Location;
+	}
+
+	return true;
 }
 
 // NavMesh로 경로를 재계산하고 데칼을 갱신합니다.

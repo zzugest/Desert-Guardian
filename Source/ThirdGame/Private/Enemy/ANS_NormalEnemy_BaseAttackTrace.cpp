@@ -85,7 +85,9 @@ void UANS_NormalEnemy_BaseAttackTrace::NotifyTick(USkeletalMeshComponent* MeshCo
 				*HitPawn->GetName(), StateDamage,
 				Enemy->HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"));
 
+			Enemy->CurrentHitType = HitType;
 			UGameplayStatics::ApplyDamage(HitPawn, StateDamage, Enemy->GetController(), Enemy, UDamageType::StaticClass());
+			Enemy->CurrentHitType = FGameplayTag::EmptyTag;
 			Enemy->bHasDamaged = true;
 		}
 	}

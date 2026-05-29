@@ -10,6 +10,8 @@
 #include "MinimapComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Engine/TextureRenderTarget2D.h"
+#include "GameFramework/Character.h"
+#include "Kismet/KismetRenderingLibrary.h"
 
 // Tick이 불필요하므로 비활성화합니다.
 UMinimapComponent::UMinimapComponent()
@@ -24,6 +26,14 @@ void UMinimapComponent::BeginPlay()
 
 	AActor* Owner = GetOwner();
 	if (!Owner) return;
+
+	// 로컬 플레이어 캐릭터에만 SceneCapture를 생성합니다. 원격 캐릭터는 불필요합니다.
+	ACharacter* OwnerChar = Cast<ACharacter>(Owner);
+	if (!OwnerChar || !OwnerChar->IsLocallyControlled()) return;
+
+	// 각 클라이언트가 독립적인 RenderTarget을 갖도록 런타임에 동적 생성합니다.
+	RenderTarget = UKismetRenderingLibrary::CreateRenderTarget2D(
+		GetWorld(), 256, 256, RTF_RGBA8, FLinearColor::Black, false);
 
 	CaptureComponent = NewObject<USceneCaptureComponent2D>(Owner, TEXT("MinimapCapture"));
 	if (!CaptureComponent) return;

@@ -13,6 +13,7 @@
 // =========================================================================================
 
 #include "CombatComponent.h"
+#include "Components/PostProcessComponent.h"
 
 #include "Net/UnrealNetwork.h"
 #include "MyCharacter.h"
@@ -99,9 +100,30 @@ void UCombatComponent::OnRep_ActiveBuffs()
 void UCombatComponent::OnRep_Stats()
 {
     AMyCharacter* Owner = GetCharacterOwner();
-    if (Owner && Owner->PlayerHUD)
+    if (!Owner) return;
+
+    if (Owner->PlayerHUD)
     {
         Owner->PlayerHUD->UpdateState(CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP);
+    }
+
+    // HP가 0 이하면 로컬에서 사망 태그를 설정하고 화면을 흑백으로 전환합니다.
+    if (CurrentHP <= 0.f)
+    {
+        Owner->AddStateTag("State.Dead");
+        if (Owner->IsLocallyControlled() && Owner->DeathPostProcess)
+        {
+            Owner->DeathPostProcess->BlendWeight = 1.f;
+        }
+    }
+    // HP가 0 초과면 사망 태그를 제거하고 화면을 원래대로 복구합니다. (부활 시)
+    else
+    {
+        Owner->RemoveStateTag("State.Dead");
+        if (Owner->IsLocallyControlled() && Owner->DeathPostProcess)
+        {
+            Owner->DeathPostProcess->BlendWeight = 0.f;
+        }
     }
 }
 
@@ -725,7 +747,11 @@ void UCombatComponent::ReceiveDamage(float DamageAmount)
 
     if (CurrentHP <= 0.0f)
     {
-        // TODO: 캐릭터 사망 처리
+        AMyCharacter* Owner = GetCharacterOwner();
+        if (Owner)
+        {
+            Owner->Die();
+        }
     }
 }
 

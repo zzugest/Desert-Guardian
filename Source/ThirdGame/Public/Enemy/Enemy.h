@@ -13,6 +13,7 @@
 #include "Engine/DataTable.h"
 #include "Perception/AIPerceptionTypes.h"
 #include "NPC/Quest/QuestData.h"
+#include "GameplayTagContainer.h"
 #include "Enemy.generated.h"
 
 class UWidgetComponent;
@@ -297,5 +298,10 @@ public:
 	APlayerCameraManager* CachedCameraManager;
 
 	FText MyDisplayName;
+
+	// ANS_SetHitType이 설정하는 현재 공격의 히트 타입 태그입니다. (예: HitType.Knockback)
+	// ExecuteAttackHit() 호출 시 이 태그를 읽어 플레이어에게 전달합니다.
+	UPROPERTY()
+	FGameplayTag CurrentHitType;
 
 };

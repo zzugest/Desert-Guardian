@@ -98,7 +98,10 @@ void UAN_GroundSlamSocket::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenc
 		APawn* HitPawn = Cast<APawn>(HitResult.GetActor());
 		if (HitPawn && HitPawn->IsPlayerControlled())
 		{
+			// 히트 리액션 타입을 설정하고 데미지를 적용합니다.
+			Enemy->CurrentHitType = HitType;
 			UGameplayStatics::ApplyDamage(HitPawn, SlamDamage, Enemy->GetController(), Enemy, UUndodgeableDamageType::StaticClass());
+			Enemy->CurrentHitType = FGameplayTag::EmptyTag;
 			Enemy->bHasDamaged = true;
 		}
 	}

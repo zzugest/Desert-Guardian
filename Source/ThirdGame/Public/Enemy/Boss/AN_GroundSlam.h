@@ -1,11 +1,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Animation/AnimNotifies/AnimNotify.h"
+#include "AnimNotify/AN_AttackBase.h"
 #include "AN_GroundSlam.generated.h"
 
 UCLASS()
-class THIRDGAME_API UAN_GroundSlam : public UAnimNotify
+class THIRDGAME_API UAN_GroundSlam : public UAN_AttackBase
 {
 	GENERATED_BODY()
 

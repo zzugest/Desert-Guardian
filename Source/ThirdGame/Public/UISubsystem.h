@@ -30,6 +30,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UI")
 	void CloseAllActiveUIs();
 
+	// 현재 UISubsystem이 관리하는 열린 위젯이 없는지 여부를 반환합니다.
+	bool HasNoOpenWidgets() const { return OpenWidgets.IsEmpty(); }
+
 private:
 	// 현재 화면에 렌더링되어 상호작용 가능한 상태로 열려있는 위젯들의 실시간 추적 목록입니다.
 	UPROPERTY()

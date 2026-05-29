@@ -3,14 +3,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Animation/AnimNotifies/AnimNotifyState.h"
+#include "AnimNotify/ANS_AttackBase.h"
 #include "ANS_NormalEnemy_BaseAttackTrace.generated.h"
 
-/**
- * 
- */
 UCLASS()
-class THIRDGAME_API UANS_NormalEnemy_BaseAttackTrace : public UAnimNotifyState
+class THIRDGAME_API UANS_NormalEnemy_BaseAttackTrace : public UANS_AttackBase
 {
 	GENERATED_BODY()
 

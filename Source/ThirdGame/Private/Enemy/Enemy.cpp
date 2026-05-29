@@ -380,6 +380,9 @@ void AEnemy::OnTargetDetected(AActor* Actor, FAIStimulus Stimulus)
 	AMyCharacter* PlayerCharacter = Cast<AMyCharacter>(Actor);
 	if (!PlayerCharacter) return;
 
+	// 사망한 플레이어는 감지하지 않습니다.
+	if (PlayerCharacter->HasStateTag("State.Dead")) return;
+
 	if (GetName().Contains(TEXT("NormalOrc_1_C_0")))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[DiagPerception] 플레이어 %s: %s"),

@@ -29,6 +29,14 @@ public:
 	UFUNCTION()
 	void OnBossKilled(AEnemy* DeadEnemy);
 
+	// 이 포탈이 연결하는 목적지 서브레벨 이름을 반환합니다. (자동이동 경로 탐색에 사용)
+	UFUNCTION(BlueprintCallable, Category = "Portal")
+	FName GetTargetSubLevelName() const;
+
+	// 이 포탈이 속한 현재 서브레벨 이름을 반환합니다. (자동이동 포탈 필터링에 사용)
+	UFUNCTION(BlueprintCallable, Category = "Portal")
+	FName GetCurrentSubLevelName() const;
+
 protected:
 	// �÷��̾ ��Ҵ��� �����ϴ� ���� �ڽ�
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Portal Logic")

@@ -1,13 +1,13 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Animation/AnimNotifies/AnimNotify.h"
+#include "AnimNotify/AN_AttackBase.h"
 #include "AN_GroundSlamSocket.generated.h"
 
 // AN_GroundSlam의 원본 로직 (소켓 XY 기준 이펙트 + 데미지 트레이스)
 // 보스 점프 공격 외 다른 공격에서 소켓 기반으로 동작해야 할 때 이 클래스를 사용합니다.
 UCLASS()
-class THIRDGAME_API UAN_GroundSlamSocket : public UAnimNotify
+class THIRDGAME_API UAN_GroundSlamSocket : public UAN_AttackBase
 {
 	GENERATED_BODY()
 

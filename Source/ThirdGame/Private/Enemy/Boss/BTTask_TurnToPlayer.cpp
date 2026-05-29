@@ -14,6 +14,7 @@
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Animation/AnimInstance.h"
+#include "Enemy/Boss/BossMonster.h"
 
 // 노드 이름을 설정하고, TickTask 활성화 및 블랙보드 키 타입을 초기화합니다.
 UBTTask_TurnToPlayer::UBTTask_TurnToPlayer()
@@ -73,9 +74,12 @@ EBTNodeResult::Type UBTTask_TurnToPlayer::ExecuteTask(UBehaviorTreeComponent& Ow
 	// 선택된 몽타주가 없으면 즉시 완료 처리합니다.
 	if (!SelectedMontage) return EBTNodeResult::Succeeded;
 
-	// 몽타주를 재생하고 종료 델리게이트를 연결합니다.
-	if (BossChar->PlayAnimMontage(SelectedMontage) > 0.0f)
+	// Multicast로 모든 클라이언트에 회전 몽타주를 동기화하고, 종료 델리게이트는 서버에만 바인딩합니다.
+	ABossMonster* Boss = Cast<ABossMonster>(BossChar);
+	if (Boss)
 	{
+		Boss->Multicast_PlayTurnMontage(SelectedMontage);
+
 		UAnimInstance* AnimInstance = BossChar->GetMesh()->GetAnimInstance();
 		if (AnimInstance)
 		{
