@@ -8,6 +8,7 @@
 #include "CombatComponent.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnCombatBuffUpdated);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDamageTaken);
 
 USTRUCT(BlueprintType)
 struct FActiveBuffInfo
@@ -219,6 +220,14 @@ public:
 
     UPROPERTY(BlueprintAssignable, Category = "Events")
     FOnCombatBuffUpdated OnCombatBuffUpdated;
+
+    UPROPERTY(BlueprintAssignable, Category = "Events")
+    FOnDamageTaken OnDamageTaken;
+
+private:
+    float PrevHP = 0.f;
+
+public:
 
     UPROPERTY()
     FName ActiveAttackBuffID;

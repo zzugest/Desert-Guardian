@@ -8,6 +8,7 @@
 #include "NPC/Shop/ShopNPC.h"
 #include "Skill/SkillComponent.h"
 #include "GameplayTagContainer.h"
+#include "Components/TimelineComponent.h"
 #include "MyCharacter.generated.h"
 
 class UInputMappingContext;
@@ -56,6 +57,26 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Death")
 	UPostProcessComponent* DeathPostProcess;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Combat|VFX")
+	UPostProcessComponent* DamageOverlayPostProcess;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|VFX")
+	UMaterialInterface* DamageOverlayMaterial;
+
+	UPROPERTY()
+	UMaterialInstanceDynamic* DamageOverlayDMI;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Combat|VFX")
+	UCurveFloat* DamageOverlayCurve;
+
+	FTimeline DamageOverlayTimeline;
+
+	UFUNCTION()
+	void PlayDamageOverlay();
+
+	UFUNCTION()
+	void OnDamageOverlayUpdate(float Value);
 
 	UPROPERTY(EditDefaultsOnly, Category = "UI")
 	TSubclassOf<UHUDRootWidget> HUDRootClass;

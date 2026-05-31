@@ -34,6 +34,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Portal")
 	FName GetCurrentSubLevelName() const;
 
+	UFUNCTION(BlueprintCallable, Category = "Portal")
+	void TravelThroughPortalDirect(class AMyCharacter* PlayerCharacter);
+
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Portal Logic")
 	UBoxComponent* CollisionBox;
