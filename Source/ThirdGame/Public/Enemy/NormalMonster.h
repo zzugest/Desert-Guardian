@@ -1,10 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Enemy.h"
 #include "NormalMonster.generated.h"
 
-// ���� ����
 class UPawnSensingComponent;
 class ACharacter;
 

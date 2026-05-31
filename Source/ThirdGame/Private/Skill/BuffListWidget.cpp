@@ -1,4 +1,4 @@
-#include "Skill/BuffListWidget.h"
+﻿#include "Skill/BuffListWidget.h"
 #include "Components/HorizontalBox.h"
 #include "Skill/BuffIconWidget.h"
 #include "Skill/SkillComponent.h"
@@ -7,21 +7,19 @@
 #include "CombatComponent.h"
 #include "ItemData.h"
 
+// =========================================================================================
 // BuffListWidget.cpp
-// Purpose:
-//   - ĳ���Ϳ� �ɸ� ��Ƽ�� �������� ȭ�鿡 ���������� �����ϴ� ����.
-//   - SkillComponent�� OnBuffListUpdated ��������Ʈ�� �����Ͽ� ���� �� UI ����.
-// Key behaviors:
-//   - NativeConstruct: �÷��̾��� SkillComponent�� ã�� �����ϰ� �ʱ� ��� ����.
-//   - UpdateBuffList: ���� �������� ����� ActiveBuffs�� ���� ������ ������ �����.
-// Safety notes:
-//   - CachedSkillComp, BuffBox, BuffIconClass ������ ��ȿ�� �˻� �ʿ�.
+//
+// [파일 역할]
+// 캐릭터에 걸린 버프 아이콘들을 화면에 가로로 나열하는 위젯입니다.
+// SkillComponent의 OnBuffListUpdated 델리게이트를 구독하여 버프 변경 시 UI를 갱신합니다.
+// =========================================================================================
 
 void UBuffListWidget::NativeConstruct()
 {
     Super::NativeConstruct();
 
-    // ���⼭ MyChar��� ���� �����ϴ� {
+    // 소유 캐릭터에서 SkillComponent와 CombatComponent를 찾아 캐싱하고 델리게이트를 바인딩합니다.
     if (AMyCharacter* MyChar = Cast<AMyCharacter>(GetOwningPlayerPawn()))
     {
         CachedSkillComp = MyChar->FindComponentByClass<USkillComponent>();
@@ -31,7 +29,6 @@ void UBuffListWidget::NativeConstruct()
             CachedSkillComp->OnBuffListUpdated.AddDynamic(this, &UBuffListWidget::UpdateBuffList);
         }
 
-        //  �ݵ�� MyChar�� �� { } ���ʿ��� �� �ڵ尡 ����Ǿ�� �մϴ�!
         CachedCombatComp = MyChar->FindComponentByClass<UCombatComponent>();
         if (CachedCombatComp)
         {
@@ -39,7 +36,7 @@ void UBuffListWidget::NativeConstruct()
         }
 
         UpdateBuffList();
-    } // ���⼭ MyChar ���� �����ϴ� }
+    }
 
     GetWorld()->GetTimerManager().SetTimer(BuffUILogTimerHandle, this, &UBuffListWidget::LogBuffUIStatus, 1.0f, true);
 }
@@ -70,28 +67,26 @@ void UBuffListWidget::UpdateBuffList()
     BuffBox->ClearChildren();
 
     // ========================================================
-    // 1. ��ų ������ �׸��� (���� ���� ����)
+    // 1. 스킬 버프 아이콘 표시 (스킬 컴포넌트 버프 목록)
     // ========================================================
     for (const FActiveBuff& Buff : CachedSkillComp->ActiveBuffs)
     {
         UBuffIconWidget* IconWidget = CreateWidget<UBuffIconWidget>(GetWorld(), BuffIconClass);
 
-        //  �ϴ� ������ ���������� ����������� ������ ȭ�鿡 ��� �غ� �մϴ�!
         if (IconWidget)
         {
             UTexture2D* FoundIcon = nullptr;
 
-            // ������ ���̺��� ���������� ������� ���� �̹����� ã���ϴ�.
+            // 스킬 데이터 테이블에서 해당 버프 ID의 아이콘 이미지를 찾습니다.
             if (SkillDataTable)
             {
                 FSkillData* Data = SkillDataTable->FindRow<FSkillData>(Buff.BuffID, TEXT("BuffContext"));
                 if (Data) FoundIcon = Data->Icon;
             }
 
-            // ã�� �̹���(������ nullptr)�� �ð��� ������ �Ѱ��ݴϴ�.
+            // 찾은 아이콘(없으면 nullptr)과 시간 정보를 버프 아이콘 위젯에 전달합니다.
             IconWidget->InitBuff(FoundIcon, Buff.MaxDuration, Buff.RemainingTime);
 
-            // ȭ�鿡 ����!
             BuffBox->AddChildToHorizontalBox(IconWidget);
         }
     }

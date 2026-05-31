@@ -1,5 +1,4 @@
-// InventoryWidget.h
-
+﻿
 #pragma once
 
 #include "CoreMinimal.h"
@@ -27,10 +26,8 @@ public:
 
 protected:
 
-	// ������ ó�� ������ ��
 	virtual void NativeConstruct() override;
 
-	// ������ ȭ�鿡�� ���ŵ� ��
 	virtual void NativeDestruct() override;
 
 	UPROPERTY(meta = (BindWidget))
@@ -42,7 +39,6 @@ protected:
 	UFUNCTION()
 	void OnCloseButtonClicked();
 
-	// UpdateUI 호출마다 NewObject를 반복 생성하지 않기 위해 미리 만들어 재사용합니다.
 	UPROPERTY()
 	TArray<class UInventoryItemObject*> CachedItemObjects;
 

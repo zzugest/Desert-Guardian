@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
@@ -17,15 +17,12 @@ public:
 	ABossRoomTrigger();
 
 protected:
-	// �÷��̾ ���� ������ �ڽ�
 	UPROPERTY(VisibleAnywhere, Category = "Trigger")
 	UBoxComponent* CollisionBox;
 
-	// �����Ϳ��� ����� �츮�� ���� �ƽ�(���� ������) ����
 	UPROPERTY(EditAnywhere, Category = "Cinematic")
 	ULevelSequence* BossIntroSequence;
 
-	// �ƽ��� �� �� ����Ǵ� ���� ���� ���� ����
 	bool bHasPlayed = false;
 
 	UPROPERTY()

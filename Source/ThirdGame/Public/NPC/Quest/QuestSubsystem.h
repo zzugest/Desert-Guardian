@@ -34,4 +34,8 @@ public:
     // 완료된 퀘스트 ID 목록 (GameInstanceSubsystem 이므로 레벨 이동 후에도 유지됨)
     UPROPERTY(BlueprintReadWrite, Category = "Quest System")
     TArray<FName> CompletedQuests;
+
+    // 포탈을 통해 레벨 전환 후 자동이동을 재개해야 하는지 여부
+    // GameInstanceSubsystem이므로 레벨 이동 후에도 값이 유지됩니다.
+    bool bPendingInterLevelAutoMove = false;
 };

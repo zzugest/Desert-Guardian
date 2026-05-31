@@ -1,4 +1,4 @@
-#include "Skill/SkillComponent.h"
+﻿#include "Skill/SkillComponent.h"
 #include "Skill/SkillSubsystem.h"
 #include "Skill/SkillData.h"
 #include "CombatComponent.h"
@@ -11,22 +11,17 @@
 #include "Skill/ProjectileBase.h"
 #include "WarningSubsystem.h"
 
+// =========================================================================================
 // SkillComponent.cpp
-// Purpose:
-//   - ĳ���Ϳ� �ٴ� ��ų ����/��ٿ�/���� ���� ������Ʈ.
-//   - ��ų ���� �� ��ٿ� ���, ���� ����, ���� ���, ����ü ���� ���� ���.
-// Key behaviors:
-//   - BeginPlay: SkillSubsystem���� ��� ������ ���� �� ���� ����Ʈ ���� ��ε�ĳ��Ʈ.
-//   - TickComponent: ActiveCooldowns/ActiveBuffs �ð� ��� ó�� �� ���� �� ����/��ε�ĳ��Ʈ.
-//   - TryCastSkill: ��ų ��� ������(��ٿ�/���� üũ, �ִϸ��̼� ���, ���� ����, ����ü ��ȯ).
-//   - AddBuff/Revive/SaveTemporaryData �� ���� �Լ���.
-// Safety notes:
-//   - SkillSubsystem, SkillData, CombatComp ������ null üũ �ʼ�.
-//   - ActiveCooldowns ��ȸ/������ Iterator ���, ActiveBuffs ������ ���� ó���� �����ϰ� ����.
+//
+// [파일 역할]
+// 캐릭터에 붙는 스킬 관리/쿨다운/버프 관련 컴포넌트입니다.
+// 스킬 시전 시 쿨다운 등록, 버프 관리, 투사체 생성 등을 담당합니다.
+// =========================================================================================
 
 USkillComponent::USkillComponent()
 {
-	// ��Ÿ�� ó���� ���� ƽ ���
+	// 쿨타임 처리를 위해 틱 활성화
 	PrimaryComponentTick.bCanEverTick = true;
 }
 
@@ -34,20 +29,20 @@ void USkillComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// �������κ��� CombatComp ĳ�� (���� ����)
+	// 오너로부터 CombatComp 캐싱 (매번 탐색 방지)
 	if (AActor* Owner = GetOwner())
 	{
 		CombatComp = Owner->FindComponentByClass<UCombatComponent>();
 	}
 
-	// SkillSubsystem���� ��� ������ ����
+	// SkillSubsystem에서 임시 저장된 데이터 로드
 	if (UGameInstance* GI = GetWorld()->GetGameInstance())
 	{
 		if (USkillSubsystem* SkillSys = GI->GetSubsystem<USkillSubsystem>())
 		{
 			SkillSys->LoadTemporaryData(ActiveCooldowns, ActiveBuffs);
 
-			// ������ ������ ������ UI ���� �˸�
+			// 로드된 버프가 있으면 UI 갱신 알림
 			if (ActiveBuffs.Num() > 0)
 			{
 				OnBuffListUpdated.Broadcast();
@@ -71,7 +66,7 @@ void USkillComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActor
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
 	// -----------------------
-	// 1) ��Ÿ�� ���� (TMap)
+	// 1) 쿨타임 감소 (TMap)
 	// -----------------------
 	if (ActiveCooldowns.Num() > 0)
 	{
@@ -86,7 +81,7 @@ void USkillComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActor
 	}
 
 	// -----------------------
-	// 2) ���� ���� (TArray, ���� ����)
+	// 2) 버프 감소 (TArray, 역순 순회)
 	// -----------------------
 	if (ActiveBuffs.Num() > 0)
 	{
@@ -98,7 +93,7 @@ void USkillComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActor
 
 			if (ActiveBuffs[i].RemainingTime <= 0.0f)
 			{
-				//UE_LOG(LogTemp, Log, TEXT("���� ����: %s"), *ActiveBuffs[i].BuffID.ToString());
+				//UE_LOG(LogTemp, Log, TEXT("버프 만료: %s"), *ActiveBuffs[i].BuffID.ToString());
 				ActiveBuffs.RemoveAt(i);
 				bBuffExpired = true;
 			}
@@ -126,21 +121,21 @@ void USkillComponent::TryCastSkill(int32 SlotIndex)
 		}
 	}
 
-	// 1) SkillSubsystem ȹ��
+	// 1) SkillSubsystem 획득
 	UGameInstance* GI = GetWorld()->GetGameInstance();
 	if (!GI) return;
 
 	USkillSubsystem* SkillSys = GI->GetSubsystem<USkillSubsystem>();
 	if (!SkillSys) return;
 
-	// 2) ������ ��ų ID Ȯ��
+	// 2) 슬롯의 스킬 ID 확인
 	FName SkillID = SkillSys->GetSkillIDInSlot(SlotIndex);
 	if (SkillID.IsNone())
 	{
 		return;
 	}
 
-	// 3) ���� ��Ÿ�� ������ �˻�
+	// 3) 현재 쿨타임 중인지 검사
 	if (ActiveCooldowns.Contains(SkillID))
 	{
 		float Remaining = ActiveCooldowns[SkillID];
@@ -160,7 +155,7 @@ void USkillComponent::TryCastSkill(int32 SlotIndex)
 		return;
 	}
 
-	// 4) ��ų ������ ��ȸ
+	// 4) 스킬 데이터 조회
 	FSkillData* Data = SkillSys->GetSkillData(SkillID);
 	if (!Data) return;
 
@@ -257,7 +252,7 @@ FName USkillComponent::GetSkillIDAtSlot(int32 SlotIndex)
 
 float USkillComponent::GetMaxCooldown(FName SkillID) const
 {
-	// ������ ��ȸ�� ���� SkillSubsystem ���
+	// 데이터 조회를 위해 SkillSubsystem 조회
 	UGameInstance* GI = GetWorld()->GetGameInstance();
 	if (!GI) return 1.0f;
 
@@ -275,7 +270,7 @@ float USkillComponent::GetMaxCooldown(FName SkillID) const
 
 void USkillComponent::AddBuff(FName NewBuffID, float Duration)
 {
-	// ���� ���� ������ ������ ���ӽð� ���� �� UI ���� ���
+	// 같은 버프가 이미 있으면 남은 시간을 갱신하고 UI 갱신 후 종료합니다.
 	for (FActiveBuff& Buff : ActiveBuffs)
 	{
 		if (Buff.BuffID == NewBuffID)
@@ -287,7 +282,7 @@ void USkillComponent::AddBuff(FName NewBuffID, float Duration)
 		}
 	}
 
-	// �� ���� �߰� �� UI ���� ���
+	// 새 버프를 추가하고 UI를 갱신합니다.
 	FActiveBuff NewBuff;
 	NewBuff.BuffID = NewBuffID;
 	NewBuff.RemainingTime = Duration;
@@ -299,7 +294,7 @@ void USkillComponent::AddBuff(FName NewBuffID, float Duration)
 
 void USkillComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	// ���� ��ȯ �Ǵ� ���� �� ��� ����
+	// 레벨 전환 또는 게임 종료 시 데이터를 저장합니다.
 	if (EndPlayReason == EEndPlayReason::LevelTransition || EndPlayReason == EEndPlayReason::RemovedFromWorld || EndPlayReason == EEndPlayReason::Destroyed)
 	{
 		if (UGameInstance* GI = GetWorld()->GetGameInstance())
@@ -339,7 +334,7 @@ void USkillComponent::SpawnProjectile(FName SkillID, FName SocketName)
 		UE_LOG(LogTemp, Warning, TEXT("[SKILL_DBG][3] Spawning projectile | Socket: %s | Location: %s | Damage: %f"),
 			*SocketName.ToString(), *SpawnLocation.ToString(), FinalDamage);
 
-		// 타겟이 있으면 타겟 방향으로, 없으면 캐릭터 정면으로 발사
+		// 타겟이 있으면 타겟 방향으로, 없으면 캐릭터 정면으로 발사합니다.
 		FRotator SpawnRotation = Owner->GetActorRotation();
 		if (Owner->TargetingComp && Owner->TargetingComp->CurrentTarget)
 		{
@@ -348,7 +343,7 @@ void USkillComponent::SpawnProjectile(FName SkillID, FName SocketName)
 			SpawnRotation.Pitch = 0.f; // 수직 각도 제거 — 높이 차이로 인한 대각선 비행 방지
 		}
 
-		// ��ȯ �� ����/�ν�Ƽ�����͸� �����Ͽ� ������ ��ó�� ����
+		// 스폰 시 오너/인스티게이터를 지정하여 데미지 출처가 명확히 표시되도록 합니다.
 		FActorSpawnParameters SpawnParams;
 		SpawnParams.Instigator = Owner;
 		SpawnParams.Owner = Owner;

@@ -62,6 +62,11 @@ public:
 	UFUNCTION(NetMulticast, Reliable)
 	void Multicast_JumpToLandSmash();
 
+	// 점프 공격 발사 시 모든 클라이언트에서 보스가 즉시 플레이어 방향을 향하도록 동기화합니다.
+	// SetActorRotation 단독 사용 시 복제 딜레이로 클라이언트가 틀린 방향을 보는 문제를 방지합니다.
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_FaceBossToward(FRotator NewRotation);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

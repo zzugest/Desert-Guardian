@@ -1,4 +1,4 @@
-#include "Skill/SkillSlotWidget.h"
+﻿#include "Skill/SkillSlotWidget.h"
 #include "Components/Image.h"
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
@@ -12,16 +12,13 @@
 #include "Character/CombatComponent.h"
 #include "SkillTooltipWidget.h"
 
+// =========================================================================================
 // SkillSlotWidget.cpp
-// Purpose:
-//   - ���� ��ų ���� UI ����. ���Կ� �Ҵ�� ��ų�� ������/��ٿ��� ǥ���ϰ� �巡��/����� ����.
-// Key behaviors:
-//   - NativeConstruct: ������ ĳ������ SkillComponent ��ȸ, SkillSubsystem ��������Ʈ ����, �ʱ� UpdateSlotInfo ȣ��.
-//   - UpdateSlotInfo: ���Կ� ������ SkillID�� ��ȸ�ϰ� ������/��ٿ� �ִ�ġ ����.
-//   - NativeTick: ������ SkillComponent�� ���� ��Ÿ���� ǥ��(���α׷����� ����).
-//   - �巡��/��� ����: ��ų �巡�� �� ���־� ����, ��� �� EquipSkill ȣ��.
-// Safety notes:
-//   - GetGameInstance()/SkillSubsystem/OwnerSkillComp ������ null �˻� �ʿ�.
+//
+// [파일 역할]
+// 퀵 스킬 슬롯 UI 위젯입니다.
+// 슬롯에 할당된 스킬의 아이콘/쿨다운을 표시하고 드래그 앤 드롭을 처리합니다.
+// =========================================================================================
 
 void USkillSlotWidget::NativeConstruct()
 {
@@ -35,7 +32,7 @@ void USkillSlotWidget::NativeConstruct()
 		OwnerCombatComp = PlayerChar->FindComponentByClass<UCombatComponent>();
 	}
 
-	// 2) SkillSubsystem ��������Ʈ ����: ���� ���� ����� UpdateSlotInfo�� ȣ��ǵ��� ��
+	// 2) SkillSubsystem 델리게이트 바인딩: 슬롯 내용 변경 시 UpdateSlotInfo가 호출되도록 합니다.
 	if (UGameInstance* GI = GetGameInstance())
 	{
 		if (USkillSubsystem* SkillSys = GI->GetSubsystem<USkillSubsystem>())
@@ -44,7 +41,7 @@ void USkillSlotWidget::NativeConstruct()
 		}
 	}
 
-	// 3) �ʱ� UI ����
+	// 3) 초기 UI 갱신
 	UpdateSlotInfo();
 }
 
@@ -65,14 +62,14 @@ void USkillSlotWidget::NativeDestruct()
 
 void USkillSlotWidget::UpdateSlotInfo()
 {
-	// ���� �˻�
+	// 기본 검사
 	UGameInstance* GI = GetGameInstance();
 	if (!GI) return;
 
 	USkillSubsystem* SkillSys = GI->GetSubsystem<USkillSubsystem>();
 	if (!SkillSys) return;
 
-	// ���Կ� ���ε� ��ų ���̵� ��ȸ
+	// 슬롯에 바인딩된 스킬 아이디 조회
 	CurrentSkillID = SkillSys->GetSkillIDInSlot(SlotIndex);
 
 	// 스킬이 없으면 UI 숨기고 툴팁도 제거
@@ -84,7 +81,7 @@ void USkillSlotWidget::UpdateSlotInfo()
 		return;
 	}
 
-	// ���������̺����� ��ų ���� ��ȸ �� ������/��Ÿ�� ����
+	// 데이터테이블에서 스킬 정보를 조회하여 아이콘/쿨타임 초기화
 	FSkillData* Data = SkillSys->GetSkillData(CurrentSkillID);
 	if (Data)
 	{
@@ -95,7 +92,7 @@ void USkillSlotWidget::UpdateSlotInfo()
 		}
 	}
 
-	// 쿨다운 바 초기화 (이후에 가려졌다가 쿨타임 중에는 보이게 됨)
+	// 쿨다운 바 초기화 (이후에 가려졌다가 쿨타임 중에는 보이게 됩니다)
 	if (CooldownBar)
 	{
 		CooldownBar->SetPercent(0.0f);
@@ -112,7 +109,7 @@ void USkillSlotWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 
-	// ���� ��Ÿ���� SkillComponent���� ��ȸ�Ͽ� ���α׷����ٿ� �ݿ�
+	// 현재 쿨타임을 SkillComponent에서 조회하여 프로그레스바에 반영합니다.
 	if (!OwnerSkillComp || CurrentSkillID.IsNone()) return;
 
 	float RemainingTime = OwnerSkillComp->GetRemainingCooldown(CurrentSkillID);
@@ -149,7 +146,7 @@ void USkillSlotWidget::NativePreConstruct()
 {
 	Super::NativePreConstruct();
 
-	// �����Ϳ��� KeyName�� �����ϸ� ��� �ݿ�
+	// 에디터에서 KeyName을 설정하면 미리보기에 반영합니다.
 	if (KeyText)
 	{
 		KeyText->SetText(KeyName);
@@ -160,7 +157,7 @@ bool USkillSlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FDragDrop
 {
 	Super::NativeOnDrop(InGeometry, InDragDropEvent, InOperation);
 
-	// ��ӵ� ���۷��̼��� ��ų �巡������ �˻�
+	// 수신된 오퍼레이션이 스킬 드래그인지 검사
 	USkillDragDropOp* DragOp = Cast<USkillDragDropOp>(InOperation);
 	if (!DragOp) return false;
 
@@ -170,7 +167,7 @@ bool USkillSlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FDragDrop
 	USkillSubsystem* SkillSys = GI->GetSubsystem<USkillSubsystem>();
 	if (!SkillSys) return false;
 
-	// ���� ����� ��û: ����ý����� �ߺ�ó���� ��ε�ĳ��Ʈ�� ���
+	// 슬롯 장착 요청: 스킬서브시스템이 중복처리를 하고 브로드캐스트를 전송합니다.
 	SkillSys->EquipSkill(SlotIndex, DragOp->SkillID);
 
 	return true;
@@ -178,7 +175,7 @@ bool USkillSlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FDragDrop
 
 FReply USkillSlotWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
-	// �� ������ �ƴϰ� ���� Ŭ���̸� �巡�� ���� Ʈ����
+	// 빈 슬롯이 아니고 왼쪽 클릭이면 드래그 감지 트리거
 	if (!CurrentSkillID.IsNone() && InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
 	{
 		FEventReply Reply = UWidgetBlueprintLibrary::DetectDragIfPressed(InMouseEvent, this, EKeys::LeftMouseButton);
@@ -192,16 +189,16 @@ void USkillSlotWidget::NativeOnDragDetected(const FGeometry& InGeometry, const F
 {
 	Super::NativeOnDragDetected(InGeometry, InMouseEvent, OutOperation);
 
-	// �� �����̸� �巡�� �Ұ�
+	// 빈 슬롯이면 드래그 불가
 	if (CurrentSkillID.IsNone()) return;
 
-	// �巡�� ���۷��̼� ���� �� SkillID ���
+	// 드래그 오퍼레이션 생성 및 SkillID 탑재
 	USkillDragDropOp* DragOp = NewObject<USkillDragDropOp>();
 	if (DragOp)
 	{
 		DragOp->SkillID = CurrentSkillID;
 
-		// ���� ���־� ���� ����(�ɼ�)
+		// 드래그 시각화 위젯 생성 (옵션)
 		if (DragVisualClass)
 		{
 			USkillDragVisual* VisualWidget = CreateWidget<USkillDragVisual>(this, DragVisualClass);
@@ -234,7 +231,7 @@ void USkillSlotWidget::NativeOnMouseEnter(const FGeometry& InGeometry, const FPo
 	Super::NativeOnMouseEnter(InGeometry, InMouseEvent);
 
 	// 마우스가 올라올 때 최신 BaseAttackPower 기준으로 툴팁을 갱신합니다.
-	// (버프로 공격력이 바뀌어도 항상 현재 값을 반영)
+	// (버프로 공격력이 바뀌어도 항상 현재 값을 반영합니다)
 	UpdateTooltip();
 }
 

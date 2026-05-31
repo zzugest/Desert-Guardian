@@ -86,8 +86,7 @@ void UAN_GroundSlam::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceBase*
 		ImpactLocation, ImpactLocation, DamageRadius,
 		UEngineTypes::ConvertToTraceType(ECC_GameTraceChannel5),
 		false, ActorsToIgnore,
-		EDrawDebugTrace::ForDuration, HitResult, true,
-		FLinearColor::Red, FLinearColor::Green, 3.0f);
+		EDrawDebugTrace::None, HitResult, true);
 
 	// 회피 불가 데미지를 적용합니다.
 	if (bHit)

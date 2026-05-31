@@ -99,4 +99,11 @@ public:
 	// 레벨 간 연결 관계를 정의하는 테이블 (BFS 경로 탐색에 사용)
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Quest")
 	UDataTable* LevelGraphTable;
+
+private:
+	// 레벨 전환 후 NavMesh 준비를 기다렸다가 자동이동을 재개합니다.
+	void ResumeAutoMoveAfterTravel();
+
+	// 레벨 전환 후 자동이동 재개 타이머 핸들 (QuestComponent는 레벨 전환 후에도 유지됨)
+	FTimerHandle InterLevelResumeTimer;
 };

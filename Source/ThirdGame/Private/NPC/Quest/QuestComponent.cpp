@@ -472,6 +472,20 @@ void UQuestComponent::StartAutoMoveToHuntTarget()
                     if (PortalTargetLevel == NextLevel)
                     {
                         UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 포탈 발견 → 위치: %s"), *Portal->GetActorLocation().ToString());
+
+                        // 도착 시 자동 포탈 통과하도록 포탈을 예약합니다.
+                        MyChar->AutoMoveComp->PendingPortal = Portal;
+
+                        // QuestComponent는 레벨 전환 후에도 살아있으므로 여기서 타이머를 걸어둡니다.
+                        // 포탈 이동 + 새 레벨 NavMesh 로드를 기다린 뒤 자동이동을 재개합니다.
+                        // (BeginPlay는 서브레벨 스트리밍 시 재호출되지 않으므로 타이머로 처리합니다.)
+                        GetWorld()->GetTimerManager().SetTimer(
+                            InterLevelResumeTimer,
+                            FTimerDelegate::CreateUObject(this, &UQuestComponent::ResumeAutoMoveAfterTravel),
+                            3.0f,
+                            false
+                        );
+
                         MyChar->AutoMoveComp->StartAutoMove(Portal->GetActorLocation());
                         return;
                     }
@@ -505,4 +519,11 @@ void UQuestComponent::StartAutoMoveToHuntTarget()
     }
 
     UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 이동 가능한 활성 퀘스트 없음"));
+}
+
+// 레벨 전환 후 NavMesh가 준비될 때까지 대기한 뒤 자동이동을 재개합니다.
+void UQuestComponent::ResumeAutoMoveAfterTravel()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 레벨 전환 후 자동이동 재개"));
+    StartAutoMoveToHuntTarget();
 }

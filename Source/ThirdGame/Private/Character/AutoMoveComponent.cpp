@@ -25,6 +25,7 @@
 #include "CombatComponent.h"
 #include "Enemy.h"
 #include "DrawDebugHelpers.h"
+#include "Portal/MapPortal.h"
 
 UAutoMoveComponent::UAutoMoveComponent()
 {
@@ -313,6 +314,21 @@ void UAutoMoveComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 
 		if (CurrentPathIndex >= PathPoints.Num())
 		{
+			// 목적지가 포탈이면 확인창 없이 자동으로 통과합니다.
+			if (PendingPortal)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 포탈 도착 → 자동 통과"));
+				AMyCharacter* MyChar = Cast<AMyCharacter>(OwnerChar);
+				if (MyChar)
+				{
+					AMapPortal* Portal = PendingPortal;
+					PendingPortal = nullptr;
+					StopAutoMove();
+					Portal->TravelThroughPortalDirect(MyChar);
+				}
+				return;
+			}
+
 			UE_LOG(LogTemp, Warning, TEXT("[AutoMove] 목적지 도착 → 자동이동 완료"));
 
 			UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
@@ -344,10 +360,11 @@ void UAutoMoveComponent::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 
 		if (bAutoMoveSprinting && CurrentSP <= 0.f)
 		{
-			// SP 소진 → Sprint 중단
-			MyChar->StopSprint();
+			// SP 소진 → bAutoMoveSprinting만 해제합니다.
+			// 실제 Sprint 중단(MaxWalkSpeed 복구·bIsSprinting 해제)은
+			// 서버 Tick의 MulticastForceStopSprint가 모든 클라이언트에 처리하므로 중복 호출하지 않습니다.
 			bAutoMoveSprinting = false;
-			UE_LOG(LogTemp, Warning, TEXT("[AutoMove] SP 소진 → Sprint 중단"));
+			UE_LOG(LogTemp, Warning, TEXT("[AutoMove] SP 소진 → Sprint 중단 (MulticastForceStopSprint 대기)"));
 		}
 		else if (!bAutoMoveSprinting && CurrentSP >= MaxSP)
 		{
@@ -396,15 +413,12 @@ void UAutoMoveComponent::CheckAndDetour()
 		if (!Enemy) continue;
 		if (IgnoredEnemies.Contains(Enemy)) continue;
 
-		// 이동 방향 앞쪽에 있는 적만 처리합니다 (dot > 0.3).
-		FVector ToEnemy = (Enemy->GetActorLocation() - CurrentPos).GetSafeNormal2D();
-		if (FVector::DotProduct(MoveDir, ToEnemy) < 0.3f) continue;
+		// 경로 차단 여부로만 판단하므로 전방 dot 조건은 불필요해 주석 처리합니다.
+		// FVector ToEnemy = (Enemy->GetActorLocation() - CurrentPos).GetSafeNormal2D();
+		// if (FVector::DotProduct(MoveDir, ToEnemy) < 0.3f) continue;
 
 		FrontEnemyCount++;
 		float AvoidRadius = Enemy->GetCapsuleComponent()->GetScaledCapsuleRadius() * EnemyAvoidanceMultiplier;
-
-		// 전방 적 회피 구체를 초록색으로 표시합니다 (0.4초 지속).
-		DrawDebugSphere(GetWorld(), Enemy->GetActorLocation(), AvoidRadius, 16, FColor::Green, false, 0.4f);
 
 		// 현재 경로(현재위치~목표)와 적 사이의 최소 거리가 회피 반경 이내인지 확인합니다.
 		FVector ClosestPt = FMath::ClosestPointOnSegment(Enemy->GetActorLocation(), CurrentPos, CurrentTarget);
@@ -412,8 +426,8 @@ void UAutoMoveComponent::CheckAndDetour()
 
 		if (DistToPath < AvoidRadius)
 		{
-			// 경로를 막는 적을 빨간색으로 표시합니다.
-			DrawDebugSphere(GetWorld(), Enemy->GetActorLocation(), AvoidRadius, 16, FColor::Red, false, 0.4f);
+			// 경로를 막는 적은 빨간색으로 표시합니다.
+			DrawDebugSphere(GetWorld(), Enemy->GetActorLocation(), AvoidRadius, 16, FColor::Red, false, AvoidanceScanInterval, 0, 2.f);
 
 			FVector OutPoint;
 			if (ComputeDetourPoint(Enemy->GetActorLocation(), AvoidRadius, OutPoint))

@@ -275,6 +275,26 @@ FName AMapPortal::GetTargetSubLevelName() const
     return PortalData->TargetSubLevelName;
 }
 
+// 자동이동 전용: 확인창 없이 포탈 데이터를 읽어 바로 레벨 이동을 실행합니다.
+void AMapPortal::TravelThroughPortalDirect(AMyCharacter* PlayerCharacter)
+{
+    if (!PlayerCharacter) return;
+    if (!PortalDataTable || PortalRowName.IsNone()) return;
+
+    FPortalData* PortalData = PortalDataTable->FindRow<FPortalData>(PortalRowName, TEXT("AutoTravel"));
+    if (!PortalData) return;
+
+    if (PortalData->PortalType == EPortalType::AnotherSubLevel)
+    {
+        PlayerCharacter->Server_RequestPortalTravel(
+            PortalData->TargetSubLevelName,
+            PortalData->CurrentSubLevelName,
+            PortalData->TargetLocation,
+            PortalData->TargetRotation
+        );
+    }
+}
+
 FName AMapPortal::GetCurrentSubLevelName() const
 {
     if (!PortalDataTable || PortalRowName.IsNone()) return NAME_None;

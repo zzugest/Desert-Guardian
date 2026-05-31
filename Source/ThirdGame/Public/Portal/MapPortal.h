@@ -1,10 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "MapPortal.generated.h"
 
-// ���� ����: �ڽ� �浹 ������Ʈ�� �˱� ����
 class UBoxComponent;
 class UWidgetComponent;
 class UUserWidget;
@@ -29,16 +28,13 @@ public:
 	UFUNCTION()
 	void OnBossKilled(AEnemy* DeadEnemy);
 
-	// 이 포탈이 연결하는 목적지 서브레벨 이름을 반환합니다. (자동이동 경로 탐색에 사용)
 	UFUNCTION(BlueprintCallable, Category = "Portal")
 	FName GetTargetSubLevelName() const;
 
-	// 이 포탈이 속한 현재 서브레벨 이름을 반환합니다. (자동이동 포탈 필터링에 사용)
 	UFUNCTION(BlueprintCallable, Category = "Portal")
 	FName GetCurrentSubLevelName() const;
 
 protected:
-	// �÷��̾ ��Ҵ��� �����ϴ� ���� �ڽ�
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Portal Logic")
 	UBoxComponent* CollisionBox;
 
@@ -46,28 +42,24 @@ protected:
 	UWidgetComponent* InteractPromptWidget;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Portal Settings")
-	UDataTable* PortalDataTable; // �츮�� ���� DT_PortalData�� ���� ĭ
+	UDataTable* PortalDataTable;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Portal Settings")
-	FName PortalRowName; // �� ��Ż�� ������ ���̺��� �� ��° ��(��� ��)���� �ĺ��� �̸�
+	FName PortalRowName;
 
-	//[�߰�] F�� ������ �� ȭ�鿡 ����� '�̵� Ȯ��â UI' ��������Ʈ Ŭ����
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Portal Settings")
 	TSubclassOf<UUserWidget> ConfirmWidgetClass;
 
-	// 수락 버튼 클릭 시 호출 — 저장된 펜딩 데이터로 텔레포트를 실행합니다.
 	UFUNCTION()
 	void OnConfirmAccepted();
 
 private:
-	// 보스 처치 여부 — 서버에서 true로 설정되면 클라이언트에 복제되어 포탈을 활성화합니다.
 	UPROPERTY(ReplicatedUsing=OnRep_bBossKilled)
 	bool bBossKilled = false;
 
 	UFUNCTION()
 	void OnRep_bBossKilled();
 
-	// 확인창 표시 후 수락 시 사용할 이동 데이터
 	FName    PendingTargetSubLevelName;
 	FName    PendingUnloadSubLevelName;
 	FVector  PendingTargetLocation  = FVector::ZeroVector;
@@ -76,7 +68,6 @@ private:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
-	// �ڽ��� ������ ����� �� ����� �Լ� (���̳��� ���ε�)
 	UFUNCTION()
 	void OnOverlapBegin(UPrimitiveComponent* OverlappedComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
 

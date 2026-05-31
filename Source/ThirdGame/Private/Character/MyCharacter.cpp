@@ -135,6 +135,12 @@ AMyCharacter::AMyCharacter()
     DeathPostProcess->SetupAttachment(RootComponent);
     DeathPostProcess->bEnabled = true;
     DeathPostProcess->BlendWeight = 0.f;
+
+    // 피격 시 화면 가장자리 빨간 오버레이용 포스트 프로세스 컴포넌트입니다.
+    DamageOverlayPostProcess = CreateDefaultSubobject<UPostProcessComponent>(TEXT("DamageOverlayPostProcess"));
+    DamageOverlayPostProcess->SetupAttachment(RootComponent);
+    DamageOverlayPostProcess->bEnabled = true;
+    DamageOverlayPostProcess->BlendWeight = 1.f;
     DeathPostProcess->Settings.bOverride_ColorSaturation = true;
     DeathPostProcess->Settings.ColorSaturation = FVector4(0.f, 0.f, 0.f, 0.f);
 
@@ -207,6 +213,34 @@ void AMyCharacter::BeginPlay()
 
     // QuestLogWidget은 WBP_HUDRoot의 자식으로 통합되었으므로 별도 AddToViewport가 필요 없습니다.
     // MinimapWidget도 HUDRoot 생성 시 함께 초기화됩니다. (위 2번 블록 참고)
+
+    // 5. 피격 오버레이 초기화 — 소유 클라이언트에서만 실행합니다.
+    if (IsLocallyControlled())
+    {
+        // DMI 생성 후 PostProcessComponent에 등록합니다.
+        if (DamageOverlayMaterial && DamageOverlayPostProcess)
+        {
+            DamageOverlayDMI = UMaterialInstanceDynamic::Create(DamageOverlayMaterial, this);
+            DamageOverlayPostProcess->AddOrUpdateBlendable(DamageOverlayDMI);
+            // 초기 상태: 오버레이 비표시
+            DamageOverlayDMI->SetScalarParameterValue(TEXT("Overlay_amount"), 0.0f);
+        }
+
+        // 타임라인 초기화: 커브를 바인딩하고 루프 없이 1회 재생으로 설정합니다.
+        if (DamageOverlayCurve)
+        {
+            FOnTimelineFloat UpdateFunc;
+            UpdateFunc.BindUFunction(this, FName("OnDamageOverlayUpdate"));
+            DamageOverlayTimeline.AddInterpFloat(DamageOverlayCurve, UpdateFunc);
+            DamageOverlayTimeline.SetLooping(false);
+        }
+
+        // CombatComponent의 피격 델리게이트에 오버레이 재생 함수를 바인딩합니다.
+        if (CombatComp)
+        {
+            CombatComp->OnDamageTaken.AddDynamic(this, &AMyCharacter::PlayDamageOverlay);
+        }
+    }
 }
 
 // 캐릭터가 파괴될 때 활성 타이머를 해제하고, 서브시스템 델리게이트 바인딩을 정리합니다.
@@ -228,10 +262,31 @@ void AMyCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
     }
 }
 
+// 피격 시 CombatComponent::OnDamageTaken 델리게이트로 호출 — 타임라인을 처음부터 재생합니다.
+void AMyCharacter::PlayDamageOverlay()
+{
+    if (DamageOverlayDMI && DamageOverlayCurve)
+    {
+        DamageOverlayTimeline.PlayFromStart();
+    }
+}
+
+// 타임라인 업데이트 콜백 — 커브 값을 Overlay_amount 파라미터에 반영합니다.
+void AMyCharacter::OnDamageOverlayUpdate(float Value)
+{
+    if (DamageOverlayDMI)
+    {
+        DamageOverlayDMI->SetScalarParameterValue(TEXT("Overlay_amount"), Value);
+    }
+}
+
 // 매 프레임 공중/지상 GameplayTag를 갱신하고, 달리기 중 스태미나 소모 및 자동 회복을 처리합니다.
 void AMyCharacter::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
+
+    // 피격 오버레이 타임라인을 매 프레임 업데이트합니다.
+    DamageOverlayTimeline.TickTimeline(DeltaTime);
 
     // 낙하 여부에 따라 InAir / Grounded 태그를 갱신합니다.
     if (GetCharacterMovement()->IsFalling())
@@ -1037,6 +1092,11 @@ float AMyCharacter::TakeDamage(float DamageAmount, struct FDamageEvent const& Da
     {
         EnterCombatStance();
         CombatComp->ReceiveDamage(ActualDamage);
+
+        // 피해로 인해 사망했으면 히트 리액션을 재생하지 않습니다.
+        // (사망 몽타주가 히트 리액션 Multicast에 의해 중단되면 OnDeathMontageEnded가
+        //  bInterrupted=true로 즉시 호출되어 사망 애니메이션 없이 바로 부활하는 버그 방지)
+        if (HasStateTag("State.Dead")) return ActualDamage;
 
         // DamageCauser(적)의 HitType 태그를 읽어 히트 리액션 몽타주를 결정합니다.
         AEnemy* AttackingEnemy = Cast<AEnemy>(DamageCauser);

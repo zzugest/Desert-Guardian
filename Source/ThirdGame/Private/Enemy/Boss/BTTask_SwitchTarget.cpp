@@ -22,11 +22,10 @@ EBTNodeResult::Type UBTTask_SwitchTarget::ExecuteTask(UBehaviorTreeComponent& Ow
 	ACharacter* BossChar = Cast<ACharacter>(AICon->GetPawn());
 	if (!BossChar) return EBTNodeResult::Failed;
 
-	AMyCharacter* PrevTarget = Cast<AMyCharacter>(BBComp->GetValueAsObject(PlayerKey.SelectedKeyName));
-
-	// 타겟 전환 탐색 범위를 시각화합니다.
-	DrawDebugSphere(BossChar->GetWorld(), BossChar->GetActorLocation(), TargetSwitchRange,
-		24, FColor::Orange, false, 2.0f, 0, 3.f);
+	// PlayerKey.SelectedKeyName 대신 하드코딩된 키를 사용합니다.
+	// OnTargetDetected(Enemy.cpp)와 LaunchToAir(BossMonster.cpp)도 동일한 키를 씁니다.
+	static const FName TargetKey = TEXT("TargetPlayer");
+	AMyCharacter* PrevTarget = Cast<AMyCharacter>(BBComp->GetValueAsObject(TargetKey));
 
 	// 범위 내 이전 타겟 외 생존한 플레이어를 수집합니다.
 	TArray<AActor*> AllPlayers;
@@ -46,7 +45,7 @@ EBTNodeResult::Type UBTTask_SwitchTarget::ExecuteTask(UBehaviorTreeComponent& Ow
 	if (Candidates.Num() > 0)
 	{
 		AMyCharacter* NewTarget = Candidates[FMath::RandRange(0, Candidates.Num() - 1)];
-		BBComp->SetValueAsObject(PlayerKey.SelectedKeyName, NewTarget);
+		BBComp->SetValueAsObject(TargetKey, NewTarget);
 		UE_LOG(LogTemp, Warning, TEXT("[Boss] 타겟 전환: [%s] → [%s]"),
 			PrevTarget ? *PrevTarget->GetName() : TEXT("없음"),
 			*NewTarget->GetName());

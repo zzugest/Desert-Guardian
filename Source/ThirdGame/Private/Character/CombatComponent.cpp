@@ -107,6 +107,14 @@ void UCombatComponent::OnRep_Stats()
         Owner->PlayerHUD->UpdateState(CurrentHP, MaxHP, CurrentMP, MaxMP, CurrentSP, MaxSP);
     }
 
+    // 소유 클라이언트에서만 피격 오버레이를 재생합니다.
+    // PrevHP가 0이면 초기화 단계이므로 오버레이를 재생하지 않습니다.
+    if (Owner->IsLocallyControlled() && PrevHP > 0.f && CurrentHP < PrevHP)
+    {
+        OnDamageTaken.Broadcast();
+    }
+    PrevHP = CurrentHP;
+
     // HP가 0 이하면 로컬에서 사망 태그를 설정하고 화면을 흑백으로 전환합니다.
     if (CurrentHP <= 0.f)
     {

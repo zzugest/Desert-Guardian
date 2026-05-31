@@ -94,4 +94,7 @@ void UMyAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 	// 애니메이션 커브 'FullBody' 값이 0보다 크면 전신 재생 모드로 전환합니다.
 	float FullBodyCurveValue = GetCurveValue(TEXT("FullBody"));
 	bFullBody = (FullBodyCurveValue > 0.0f);
+
+	// Speed 관성 없이 달리기 플래그를 즉시 전달합니다.
+	bIsSprinting = OwnerCharacter->bIsSprinting;
 }

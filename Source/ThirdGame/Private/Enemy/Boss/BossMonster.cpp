@@ -395,6 +395,12 @@ void ABossMonster::Multicast_JumpToLandSmash_Implementation()
 	}
 }
 
+// 모든 클라이언트에서 보스가 즉시 지정 방향을 향하도록 설정합니다.
+void ABossMonster::Multicast_FaceBossToward_Implementation(FRotator NewRotation)
+{
+	SetActorRotation(NewRotation);
+}
+
 // 보스는 리시 시스템을 사용하지 않으므로 비어있습니다.
 void ABossMonster::CheckLeash()
 {
@@ -474,7 +480,9 @@ void ABossMonster::LaunchToAir()
 	// 수평 힘: 거리에 비례, 수직 힘: 고정값으로 포물선 궤적을 만듭니다.
 	FVector LaunchVelocity = (ToPlayer * Distance * 0.6f) + FVector(0.f, 0.f, 1200.f);
 
-	SetActorRotation(ToPlayer.Rotation());
+	// 모든 클라이언트에 즉시 방향을 동기화한 뒤 발사합니다.
+	// SetActorRotation만 사용하면 복제 딜레이로 클라이언트가 틀린 방향을 보게 됩니다.
+	Multicast_FaceBossToward(ToPlayer.Rotation());
 	LaunchCharacter(LaunchVelocity, true, true);
 
 	// 플레이어 발밑 지면에 경고 데칼을 모든 클라이언트에 스폰합니다.

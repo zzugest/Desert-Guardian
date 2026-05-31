@@ -65,4 +65,8 @@ protected:
 	// 전신 애니메이션 몽타주를 강제로 덧씌울지 판별하는 플래그입니다.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	bool bFullBody;
+
+	// 달리기 여부 — Speed 관성 없이 즉시 AnimBP에 전달됩니다.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)
+	bool bIsSprinting;
 };

@@ -1,22 +1,17 @@
-#include "Skill/SkillSubsystem.h"
+﻿#include "Skill/SkillSubsystem.h"
 #include "UObject/ConstructorHelpers.h"
 
+// =========================================================================================
 // SkillSubsystem.cpp
-// Purpose:
-//   - ������Ʈ �� ��ų ������(���������̺�) ���� �� ������ ���� ���� ���� ����.
-//   - ��ų ���� ������ �ߺ� ���� �� OnSkillSlotUpdated ��ε�ĳ��Ʈ ����.
-// Key behaviors:
-//   - �����ڿ��� ���������̺� �ε�.
-//   - GetSkillData: SkillID�� ������ ��ȸ.
-//   - EquipSkill: ���Կ� ��ų ���(�ߺ� ���� ���� ����).
-//   - �ӽ� ������ ���/���� API: SaveTemporaryData / LoadTemporaryData.
-// Safety notes:
-//   - ConstructorHelpers�� �ϵ��ڵ��� ��ΰ� ��Ȯ���� �����Ϳ��� Ȯ�� �ʿ�.
-//   - QuickSkillSlots�� TMap�̹Ƿ� Add�� ����� ������ ��.
+//
+// [파일 역할]
+// 게임 인스턴스 전체에서 스킬 데이터(데이터테이블)를 관리하고 저장하는 서브시스템입니다.
+// 스킬 슬롯 변경 및 중복 방지, OnSkillSlotUpdated 브로드캐스트를 담당합니다.
+// =========================================================================================
 
 USkillSubsystem::USkillSubsystem()
 {
-	// �����Ϳ��� ���� ���������̺��� �ϵ� ��η� �ε� (���� ���� ��ΰ� �ٲ�� ������)
+	// 생성자에서 스킬 데이터테이블을 하드코딩 경로로 로드합니다. (경로가 바뀌면 수정 필요)
 	static ConstructorHelpers::FObjectFinder<UDataTable> DT_Asset(TEXT("/Script/Engine.DataTable'/Game/Skill/DT_SkillData.DT_SkillData'"));
 
 	if (DT_Asset.Succeeded())
@@ -27,16 +22,16 @@ USkillSubsystem::USkillSubsystem()
 
 FSkillData* USkillSubsystem::GetSkillData(FName SkillID)
 {
-	// ���������̺��� ������ nullptr ��ȯ
+	// 데이터테이블이 없으면 nullptr 반환
 	if (!SkillDataTable) return nullptr;
 
-	// ���������̺����� �ش� Row(SkillID)�� ã�� ��ȯ
+	// 데이터테이블에서 해당 Row(SkillID)를 찾아 반환
 	return SkillDataTable->FindRow<FSkillData>(SkillID, TEXT("GetSkillData"));
 }
 
 void USkillSubsystem::EquipSkill(int32 SlotIndex, FName SkillID)
 {
-	// 1) ���� ���Ե鿡�� ���� SkillID�� �̹� ��ϵ� ���Ե��� �����Ͽ� �ߺ� ���� �غ�
+	// 1) 다른 슬롯들에서 같은 SkillID가 이미 등록된 슬롯을 찾아 중복 장착 방지
 	TArray<int32> DuplicateSlots;
 	for (const auto& Pair : QuickSkillSlots)
 	{
@@ -46,22 +41,22 @@ void USkillSubsystem::EquipSkill(int32 SlotIndex, FName SkillID)
 		}
 	}
 
-	// 2) �ߺ� ������ �� ����(NAME_None)���� �ʱ�ȭ(�Ǵ� ���� ����)
+	// 2) 중복 슬롯을 빈 값(NAME_None)으로 초기화 (기존 슬롯 해제)
 	for (int32 DuplicateIndex : DuplicateSlots)
 	{
 		QuickSkillSlots.Add(DuplicateIndex, NAME_None);
 	}
 
-	// 3) �� ���Կ� �����
+	// 3) 새 슬롯에 스킬 장착
 	QuickSkillSlots.Add(SlotIndex, SkillID);
 
-	// ���� �˸�
+	// 슬롯 변경 알림 브로드캐스트
 	OnSkillSlotUpdated.Broadcast();
 }
 
 FName USkillSubsystem::GetSkillIDInSlot(int32 SlotIndex)
 {
-	// Map�� Ű�� ������ ���� ��ȯ, ������ �� �̸� ��ȯ
+	// Map에 키가 있으면 반환, 없으면 빈 이름 반환
 	if (QuickSkillSlots.Contains(SlotIndex))
 	{
 		return QuickSkillSlots[SlotIndex];
@@ -72,7 +67,7 @@ FName USkillSubsystem::GetSkillIDInSlot(int32 SlotIndex)
 
 void USkillSubsystem::SaveTemporaryData(const TMap<FName, float>& InCooldowns, const TArray<FActiveBuff>& InBuffs)
 {
-	// ���� ��ȯ/�� �̵� �� SkillComponent ���¸� �ӽ� �����ϱ� ���� ���
+	// 레벨 전환/맵 이동 시 SkillComponent 상태를 임시 저장하기 위한 함수
 	BackupCooldowns = InCooldowns;
 	BackupBuffs = InBuffs;
 }

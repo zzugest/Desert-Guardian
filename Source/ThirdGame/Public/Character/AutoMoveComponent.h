@@ -6,6 +6,7 @@
 
 class UDecalComponent;
 class AEnemy;
+class AMapPortal;
 
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class THIRDGAME_API UAutoMoveComponent : public UActorComponent
@@ -32,6 +33,10 @@ public:
 	// 현재 자동이동 중인지 여부입니다.
 	UPROPERTY(BlueprintReadOnly, Category = "AutoMove")
 	bool bIsAutoMoving = false;
+
+	// 목적지가 포탈일 때 설정합니다. 도착 시 확인창 없이 자동으로 포탈을 통과합니다.
+	UPROPERTY()
+	AMapPortal* PendingPortal = nullptr;
 
 	// 경로 시각화에 사용할 데칼 머티리얼입니다. 에디터에서 할당합니다.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AutoMove|Visual")

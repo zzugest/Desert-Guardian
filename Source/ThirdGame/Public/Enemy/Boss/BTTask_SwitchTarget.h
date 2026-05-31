@@ -18,9 +18,11 @@ protected:
 	virtual EBTNodeResult::Type ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) override;
 
 private:
-	// 타겟 전환 탐색 반경 (이 범위 안의 플레이어 중 이전 타겟 외 랜덤으로 전환)
+	// 타겟 전환 탐색 반경.
+	// AI Perception SightRadius(1500)와 맞춰야 퍼셉션 밖의 플레이어로 전환 후
+	// OnTargetDetected가 타겟을 즉시 클리어하는 문제를 방지합니다.
 	UPROPERTY(EditAnywhere, Category = "Target")
-	float TargetSwitchRange = 2000.f;
+	float TargetSwitchRange = 1500.f;
 
 	// 블랙보드 TargetPlayer 키
 	UPROPERTY(EditAnywhere, Category = "Blackboard")

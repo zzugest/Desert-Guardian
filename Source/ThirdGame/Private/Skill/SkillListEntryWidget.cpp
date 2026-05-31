@@ -1,4 +1,4 @@
-#include "Skill/SkillListEntryWidget.h"
+﻿#include "Skill/SkillListEntryWidget.h"
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
 #include "Skill/SkillSubsystem.h"
@@ -10,15 +10,13 @@
 #include "Character/CombatComponent.h"
 #include "SkillTooltipWidget.h"
 
+// =========================================================================================
 // SkillListEntryWidget.cpp
-// Purpose:
-//   - ��ų ���(����Ʈ)�� ���� ��Ʈ�� ����.
-//   - ������ ���̺����� ��ų ������ �о� �̸�/�������� ǥ���ϰ� �巡�� ������ ó��.
-// Key behaviors:
-//   - UpdateUI: SkillID�� �޾� SkillSubsystem���� ������ �ε� �� UI ����.
-//   - �巡��: ��Ŭ�� �巡�� �ν�, �巡�� �� DragOp�� SkillID�� ��� �̵���ų �� �ְ� ��.
-// Safety notes:
-//   - GetGameInstance()/SkillSubsystem/SkillData null üũ �ʿ�.
+//
+// [파일 역할]
+// 스킬 목록(리스트)의 각 항목 위젯입니다.
+// 데이터 테이블에서 스킬 정보를 읽어 이름/아이콘을 표시하고 드래그 앤 드롭을 처리합니다.
+// =========================================================================================
 
 void USkillListEntryWidget::NativeConstruct()
 {
@@ -46,7 +44,7 @@ void USkillListEntryWidget::UpdateUI(FName SkillID)
         FSkillData* Data = SkillSys->GetSkillData(SkillID);
         if (Data)
         {
-            // �̸��� ������ ����
+            // 스킬 이름과 아이콘을 UI에 표시합니다.
             if (SkillName) SkillName->SetText(Data->SkillName);
             if (SkillIcon) SkillIcon->SetBrushFromTexture(Data->Icon);
         }
@@ -81,7 +79,7 @@ void USkillListEntryWidget::NativeOnMouseEnter(const FGeometry& InGeometry, cons
 
 FReply USkillListEntryWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
-    // ���� ��ư�� ���� �巡�� ���� ����
+    // 왼쪽 버튼을 클릭 시 드래그 감지 시작
     if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
     {
         return FReply::Handled().DetectDrag(TakeWidget(), EKeys::LeftMouseButton);
@@ -94,13 +92,13 @@ void USkillListEntryWidget::NativeOnDragDetected(const FGeometry& InGeometry, co
 {
     Super::NativeOnDragDetected(InGeometry, InMouseEvent, OutOperation);
 
-    // �巡�� ���۷��̼� ���� �� SkillID ž��
+    // 드래그 오퍼레이션 생성 및 SkillID 탑재
     USkillDragDropOp* DragOp = NewObject<USkillDragDropOp>();
     if (DragOp)
     {
         DragOp->SkillID = CurrentSkillID;
 
-        // ���� ���־� ����(������ ǥ�ÿ�)
+        // 드래그 시각화 위젯 생성 (드래그 중 표시용)
         if (DragVisualClass)
         {
             USkillDragVisual* VisualWidget = CreateWidget<USkillDragVisual>(this, DragVisualClass);
